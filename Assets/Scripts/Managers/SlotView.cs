@@ -11,7 +11,7 @@ public class SlotView : MonoBehaviour
 
     // Number of distinct symbols the backend can send (ids 0..SymbolCount-1). Every array indexed
     // by symbol id is sized from this, so the count lives in exactly one place.
-    private const int SymbolCount = 14;
+    private const int SymbolCount = 13;
 
     [Header("Symbol Sprites - Assign by Name")]
     // Field names match the backend's symbol "name" exactly, so the two can be checked against
@@ -20,16 +20,15 @@ public class SlotView : MonoBehaviour
     [SerializeField] private Sprite spriteScatter;            // ID: 1  (scatter — triggers Free Games)
     [SerializeField] private Sprite spriteOrb;                // ID: 2  (triggers Hold & Spin)
     [SerializeField] private Sprite spriteMystery;            // ID: 3  (Free Games only)
-    [SerializeField] private Sprite spriteGeneral;            // ID: 4  (high — also acts as wild in Free Games)
-    [SerializeField] private Sprite spriteWarriors;           // ID: 5  (high)
-    [SerializeField] private Sprite spriteLady;               // ID: 6  (high)
-    [SerializeField] private Sprite spriteBook;               // ID: 7  (high)
-    [SerializeField] private Sprite spriteDrum;               // ID: 8  (mid)
-    [SerializeField] private Sprite spriteA;                  // ID: 9  (low — "Ace")
-    [SerializeField] private Sprite spriteK;                  // ID: 10 (low — "King")
-    [SerializeField] private Sprite spriteQ;                  // ID: 11 (low — "Queen")
-    [SerializeField] private Sprite spriteJ;                  // ID: 12 (low — "Jack")
-    [SerializeField] private Sprite sprite10;                 // ID: 13 (low — "Ten")
+    [SerializeField] private Sprite spriteWarriors;           // ID: 4  (high — top paytable)
+    [SerializeField] private Sprite spriteLady;               // ID: 5  (high)
+    [SerializeField] private Sprite spriteBook;               // ID: 6  (high)
+    [SerializeField] private Sprite spriteDrum;               // ID: 7  (mid)
+    [SerializeField] private Sprite spriteA;                  // ID: 8  (low — "Ace")
+    [SerializeField] private Sprite spriteK;                  // ID: 9  (low — "King")
+    [SerializeField] private Sprite spriteQ;                  // ID: 10 (low — "Queen")
+    [SerializeField] private Sprite spriteJ;                  // ID: 11 (low — "Jack")
+    [SerializeField] private Sprite sprite10;                 // ID: 12 (low — "Ten")
 
     // Internal array built from named sprites
     private Sprite[] symbolSprites;
@@ -40,16 +39,15 @@ public class SlotView : MonoBehaviour
     [SerializeField] private List<Sprite> animSpritesScatter;        // ID: 1
     [SerializeField] private List<Sprite> animSpritesOrb;            // ID: 2
     [SerializeField] private List<Sprite> animSpritesMystery;        // ID: 3
-    [SerializeField] private List<Sprite> animSpritesGeneral;        // ID: 4
-    [SerializeField] private List<Sprite> animSpritesWarriors;       // ID: 5
-    [SerializeField] private List<Sprite> animSpritesLady;           // ID: 6
-    [SerializeField] private List<Sprite> animSpritesBook;           // ID: 7
-    [SerializeField] private List<Sprite> animSpritesDrum;           // ID: 8
-    [SerializeField] private List<Sprite> animSpritesA;              // ID: 9
-    [SerializeField] private List<Sprite> animSpritesK;              // ID: 10
-    [SerializeField] private List<Sprite> animSpritesQ;              // ID: 11
-    [SerializeField] private List<Sprite> animSpritesJ;              // ID: 12
-    [SerializeField] private List<Sprite> animSprites10;             // ID: 13
+    [SerializeField] private List<Sprite> animSpritesWarriors;       // ID: 4
+    [SerializeField] private List<Sprite> animSpritesLady;           // ID: 5
+    [SerializeField] private List<Sprite> animSpritesBook;           // ID: 6
+    [SerializeField] private List<Sprite> animSpritesDrum;           // ID: 7
+    [SerializeField] private List<Sprite> animSpritesA;              // ID: 8
+    [SerializeField] private List<Sprite> animSpritesK;              // ID: 9
+    [SerializeField] private List<Sprite> animSpritesQ;              // ID: 10
+    [SerializeField] private List<Sprite> animSpritesJ;              // ID: 11
+    [SerializeField] private List<Sprite> animSprites10;             // ID: 12
 
     // Internal array of animation sprite lists
     private List<Sprite>[] animationSpriteArrays;
@@ -297,16 +295,15 @@ public class SlotView : MonoBehaviour
         symbolSprites[1] = spriteScatter;
         symbolSprites[2] = spriteOrb;
         symbolSprites[3] = spriteMystery;
-        symbolSprites[4] = spriteGeneral;
-        symbolSprites[5] = spriteWarriors;
-        symbolSprites[6] = spriteLady;
-        symbolSprites[7] = spriteBook;
-        symbolSprites[8] = spriteDrum;
-        symbolSprites[9] = spriteA;
-        symbolSprites[10] = spriteK;
-        symbolSprites[11] = spriteQ;
-        symbolSprites[12] = spriteJ;
-        symbolSprites[13] = sprite10;
+        symbolSprites[4] = spriteWarriors;
+        symbolSprites[5] = spriteLady;
+        symbolSprites[6] = spriteBook;
+        symbolSprites[7] = spriteDrum;
+        symbolSprites[8] = spriteA;
+        symbolSprites[9] = spriteK;
+        symbolSprites[10] = spriteQ;
+        symbolSprites[11] = spriteJ;
+        symbolSprites[12] = sprite10;
 
         // Validate
         for (int i = 0; i < symbolSprites.Length; i++)
@@ -323,16 +320,15 @@ public class SlotView : MonoBehaviour
         animationSpriteArrays[1] = animSpritesScatter;
         animationSpriteArrays[2] = animSpritesOrb;
         animationSpriteArrays[3] = animSpritesMystery;
-        animationSpriteArrays[4] = animSpritesGeneral;
-        animationSpriteArrays[5] = animSpritesWarriors;
-        animationSpriteArrays[6] = animSpritesLady;
-        animationSpriteArrays[7] = animSpritesBook;
-        animationSpriteArrays[8] = animSpritesDrum;
-        animationSpriteArrays[9] = animSpritesA;
-        animationSpriteArrays[10] = animSpritesK;
-        animationSpriteArrays[11] = animSpritesQ;
-        animationSpriteArrays[12] = animSpritesJ;
-        animationSpriteArrays[13] = animSprites10;
+        animationSpriteArrays[4] = animSpritesWarriors;
+        animationSpriteArrays[5] = animSpritesLady;
+        animationSpriteArrays[6] = animSpritesBook;
+        animationSpriteArrays[7] = animSpritesDrum;
+        animationSpriteArrays[8] = animSpritesA;
+        animationSpriteArrays[9] = animSpritesK;
+        animationSpriteArrays[10] = animSpritesQ;
+        animationSpriteArrays[11] = animSpritesJ;
+        animationSpriteArrays[12] = animSprites10;
     }
 
     private void InitializeReels()

@@ -291,7 +291,7 @@ public class SocketIOManager : MonoBehaviour
             var initData = JsonConvert.DeserializeObject<InitData>(jsonData);
             var gameConfig = InitDataConverter.ConvertToGameConfig(initData);
             var playerData = InitDataConverter.ConvertToPlayerData(initData.player);
-            var initialMatrix = GenerateRandomMatrix(gameConfig.totalResponseRowCount, gameConfig.reelCount);
+            var initialMatrix = GenerateRandomMatrix(gameConfig.rowCount, gameConfig.reelCount, gameConfig.symbols != null ? gameConfig.symbols.Count : 0);
 
             isInitialized = true;
 
@@ -584,17 +584,19 @@ public class SocketIOManager : MonoBehaviour
 
     #region Spin Request
 
+    // isFreeSpin is still accepted so GameManager's call site is untouched, but it is no longer
+    // sent: the server tracks free-spin state itself and reports it back on the response. The
+    // parameter can come out when the free-games work lands.
     internal void SendSpinRequest(int betIndex, bool isFreeSpin)
     {
-        Debug.Log($"[SocketIO] Spin request: betIndex={betIndex}, isFreeSpin={isFreeSpin}");
+        Debug.Log($"[SocketIO] Spin request: betIndex={betIndex}");
 
         var request = new SpinRequest
         {
             type = "SPIN",
             payload = new SpinPayload
             {
-                betIndex = betIndex,
-                isFreeSpin = isFreeSpin
+                betIndex = betIndex
             }
         };
 
@@ -668,21 +670,20 @@ public class SocketIOManager : MonoBehaviour
     }
 
     #endregion
-    // Pre-spin placeholder matrix (before any real result exists). Even rows (0, 2, 4 —
-    // SlotIcon (1)/(3)/(5), the top/middle/bottom of the 5-row display block) are always Blank
-    // so the idle start position shows empty rows there; odd rows (1, 3 — SlotIcon (2)/(4)) get
-    // a random real symbol.
-    private List<List<int>> GenerateRandomMatrix(int rowCount, int reelCount)
+    // Pre-spin placeholder matrix (before any real result exists). Every cell gets a random symbol
+    // now: Golden Dynasty has no blank/filler symbol, so the alternating blank-row pattern this
+    // used to build (which existed to space symbols out in Sizzling 7s' padded display block) would
+    // just scatter Drums across the idle grid. Symbol count comes from the server's own table
+    // rather than a literal, so it can't drift when the symbol set changes again.
+    private List<List<int>> GenerateRandomMatrix(int rowCount, int reelCount, int symbolCount)
     {
-        const int blankSymbolId = 7;
-
         var matrix = new List<List<int>>();
         for (int col = 0; col < reelCount; col++)
         {
             var column = new List<int>();
             for (int row = 0; row < rowCount; row++)
             {
-                column.Add(row % 2 == 0 ? blankSymbolId : UnityEngine.Random.Range(0, 7));
+                column.Add(symbolCount > 0 ? UnityEngine.Random.Range(0, symbolCount) : 0);
             }
             matrix.Add(column);
         }

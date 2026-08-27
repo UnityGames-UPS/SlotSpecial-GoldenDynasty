@@ -451,29 +451,6 @@
     },
     {
       "id": 4,
-      "name": "General",
-      "type": "high",
-      "multiplier": [
-        250,
-        100,
-        25,
-        5
-      ],
-      "useWildSub": true,
-      "description": "Highest paying regular symbol. In Free Games acts as Wild paying 5=250, 4=100, 3=25, 2=5.",
-      "displayName": "General",
-      "isBonusSymbol": false,
-      "reelsInstance": {
-        "0": 0,
-        "1": 4,
-        "2": 4,
-        "3": 4,
-        "4": 0
-      },
-      "isSpecialSymbol": false
-    },
-    {
-      "id": 5,
       "name": "Warriors",
       "type": "high",
       "multiplier": [
@@ -496,7 +473,7 @@
       "isSpecialSymbol": false
     },
     {
-      "id": 6,
+      "id": 5,
       "name": "Lady",
       "type": "high",
       "multiplier": [
@@ -518,7 +495,7 @@
       "isSpecialSymbol": false
     },
     {
-      "id": 7,
+      "id": 6,
       "name": "Book",
       "type": "high",
       "multiplier": [
@@ -540,7 +517,7 @@
       "isSpecialSymbol": false
     },
     {
-      "id": 8,
+      "id": 7,
       "name": "Drum",
       "type": "mid",
       "multiplier": [
@@ -562,7 +539,7 @@
       "isSpecialSymbol": false
     },
     {
-      "id": 9,
+      "id": 8,
       "name": "A",
       "type": "low",
       "multiplier": [
@@ -584,7 +561,7 @@
       "isSpecialSymbol": false
     },
     {
-      "id": 10,
+      "id": 9,
       "name": "K",
       "type": "low",
       "multiplier": [
@@ -606,7 +583,7 @@
       "isSpecialSymbol": false
     },
     {
-      "id": 11,
+      "id": 10,
       "name": "Q",
       "type": "low",
       "multiplier": [
@@ -628,7 +605,7 @@
       "isSpecialSymbol": false
     },
     {
-      "id": 12,
+      "id": 11,
       "name": "J",
       "type": "low",
       "multiplier": [
@@ -650,7 +627,7 @@
       "isSpecialSymbol": false
     },
     {
-      "id": 13,
+      "id": 12,
       "name": "10",
       "type": "low",
       "multiplier": [

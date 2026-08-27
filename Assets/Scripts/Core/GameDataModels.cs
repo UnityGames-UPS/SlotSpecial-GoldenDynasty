@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using Newtonsoft.Json;
 
-#region Server Communication Models
+#region Server Communication Models — Init
 
 [Serializable]
 public class InitData
@@ -13,14 +11,15 @@ public class InitData
     public ServerFeatures features;
     public ServerUIData uiData;
     public ServerPlayer player;
+    // Golden Dynasty sends no jackpot block. Kept because the platform's separate "jackpot:sync"
+    // event reuses these types, and the init-time read is already null-guarded.
     public JackpotData jackpotData;
 }
 
 [Serializable]
 public class JackpotData
 {
-    public JackpotValues values;//jackpotfeature
-
+    public JackpotValues values;
 }
 
 [Serializable]
@@ -44,97 +43,36 @@ public class ServerGameData
 {
     public List<List<int>> lines;
     public List<double> bets;
+    // The per-line-bet multiplier: total bet = bet * totalLines. Golden Dynasty has no selectable
+    // lines, so all of them are always in play and there is no separate "activeLine" any more.
     public int totalLines;
-    public int activeLine;
 }
 
 [Serializable]
 public class ServerFeatures
 {
-    public ServerScatterFeature scatter;
     public ServerFreeGamesFeature freeGames;
-    public ServerGroupPayoutFeature anyBarsPayout;
-    public ServerGroupPayoutFeature anySevensGroup;
-    public ServerWildSubstitutionFeature wildSubstitution;
-}
-
-[Serializable]
-public class ServerScatterFeature
-{
-    public double payout;
-    public bool enabled;
-    public int minTriggerCount;
-    public int scatterSymbolId;
+    public ServerHoldAndSpinFeature holdAndSpin;
 }
 
 [Serializable]
 public class ServerFreeGamesFeature
 {
-    public List<ServerFreeGamesBox> boxes;
-    public bool enabled;
+    public string description;
+    public int triggerCount;      // scatters needed to trigger
+    public int awardedCount;      // spins granted on trigger
+    public bool retriggerEnabled;
+    public int retriggerCount;    // spins granted on retrigger
+    public bool mysterySymbol;
 }
 
 [Serializable]
-public class ServerFreeGamesBox
+public class ServerHoldAndSpinFeature
 {
-    public string id;
-    public double prob;
-    public int spins;
-    public List<double> multipliers;
-}
-
-[Serializable]
-public class ServerGroupPayoutFeature
-{
-    public double payout;
-    public bool enabled;
-    public string groupName;
-}
-
-[Serializable]
-public class ServerWildSubstitutionFeature
-{
-    public bool enabled;
-    public int wildSymbolId;
-    public List<int> substituteAllExcept;
-}
-
-// Dormant CNY-era feature models — no longer referenced by ServerFeatures, kept only because
-// GameConfig.uSpinSegments (also dormant) still uses USpinSegment's type.
-[Serializable]
-public class USpinFeature
-{
-    public bool enabled;
-    public int minTrigger;
-    public int symbolId;
-    public List<USpinSegment> segments;
-}
-
-[Serializable]
-public class USpinSegment
-{
-    public int sliceIndex;
-    public string type;
-    public double multiplier;
-    public int freeGames;
-}
-
-[Serializable]
-public class MoneyBagFeature
-{
-    public bool enabled;
-    public int minTrigger;
-    public int symbolId;
-    public int bagCount;
-}
-
-[Serializable]
-public class ExtraSpinsData
-{
-    [JsonProperty("2")] public int _2; // Keep for safety/compatibility with UI
-    [JsonProperty("3")] public int _3;
-    [JsonProperty("4")] public int _4;
-    [JsonProperty("5")] public int _5;
+    public string description;
+    public int triggerCount;      // orbs needed to trigger
+    public int freeSpinsAwarded;  // respins granted, and reset to on each new orb
+    public List<double> orbPrizes;
 }
 
 [Serializable]
@@ -153,14 +91,18 @@ public class PaylineData
 public class ServerSymbolInfo
 {
     public int id;
-    public string name;
-    public List<double> multiplier; // Keep for fallback compatibility
-    public double payout;           // Single flat payout per symbol (3-reel fixed-payline game — no per-match-count table)
-    public string description;
-    public int minMatch;
-    public string group;
+    public string name;         // stable identifier ("Wild", "Scatter", "Orb", "Mystery", "A", ...)
+    public string displayName;  // player-facing ("Ace", "King", ...)
+    // Line paytable, descending from a full-reel match: index 0 = 5-of-a-kind, 1 = 4, 2 = 3, and a
+    // 4th entry (Warriors only) = 2. Absent entirely on Orb and Mystery, empty on Wild.
+    public List<double> multiplier;
+    // Scatter only, and paid on total bet rather than per line — hence its own field.
+    public List<double> scatterMultiplier;
+    public bool isSpecialSymbol; // true for Wild/Scatter/Orb/Mystery, false for paying symbols
+    public bool isBonusSymbol;   // currently false on every symbol; role unclear
+    // NOT sent yet, though the backend's own config has them: "type", "description", "minMatch".
+    // See TODO.md "Pending backend" — until "type" arrives the four specials are told apart by name.
 }
-
 
 [Serializable]
 public class ServerPlayer
@@ -168,118 +110,89 @@ public class ServerPlayer
     public double balance;
 }
 
-// ============================================================================
-// Server Response Models — real Sizzling7 backend shape
-// ============================================================================
+#endregion
+
+#region Server Communication Models — Spin Result
 
 [Serializable]
 public class ServerSpinResponse
 {
     public string id = "ResultData";
     public bool success;
-    public ServerPlayerBalance player;
+    // Row-major and top-level, NOT nested under payload: 3 rows x 5 columns, values as strings.
+    // Every row is live — this game has none of the decorative padding rows Sizzling 7s sent.
+    public List<List<string>> matrix;
     public ServerPayload payload;
+    public ServerResultFeatures features;
+    public ServerPlayerBalance player;
+    // Deliberately unbound until their populated shape is known: "cellMetadata" (always {}),
+    // "payload.mysteryRevealSymbol" (always null), "payload.orbPrizeMap" (always {}),
+    // "features.holdAndSpin.heldPositions" (always []). Newtonsoft ignores undeclared fields, so
+    // omitting them costs nothing, whereas guessing a type wrong throws and loses the whole spin.
 }
 
 [Serializable]
 public class ServerPlayerBalance
 {
-    public double? balance; // Nullable because server sends null
+    // Nullable because the old backend sometimes sent null here. Golden Dynasty has always sent a
+    // real number so far, but the guard is free.
+    public double? balance;
 }
 
 [Serializable]
 public class ServerPayload
 {
-    public List<List<string>> reels;              // Row-major: 5 rows (0-4, rows 1-3 active) x reelCount columns
-    public List<ServerWinningLine> winningLines;
-    public double totalWin;
-    public bool isFreeSpin;                        // True when this spin was played on free-spin credit
-    public int freeSpinsRemaining;                 // Server-authoritative; already decremented for this spin
-    // Nullable on purpose: the server omits this entirely on spins it doesn't apply to, and a
-    // missing value must never be read as a real multiplier of 0.
-    public double? freeSpinsMultiplier;
-    public ServerResultFeatures features;
+    // The spin's line-win total — verified as exactly the sum of lineWins[].win.
+    public double currentWinning;
+    public List<ServerLineWin> lineWins;
+    // Paid on total bet, and NOT included in currentWinning. Always 0 in every sample seen so far,
+    // so the additive assumption is unverified — revisit when a scatter actually pays.
+    public double scatterWin;
+    public int scatterCount;
 }
 
 [Serializable]
-public class ServerWinningLine
+public class ServerLineWin
 {
     public int lineIndex;
-    public List<List<int>> positions;              // [row, col] pairs, row in the padded 0-4 space
-    public double payout;
-    public bool isAnyBars;
-    public bool isAnySevens;                        // Not yet observed in captured data, modeled defensively
+    // Reel indices that took part in the win — NOT [row, col] pairs. The row for each reel comes
+    // from the payline definition at gameData.lines[lineIndex].
+    public List<int> positions;
+    public double win;
 }
 
 [Serializable]
 public class ServerResultFeatures
 {
-    public ServerBonusResult bonus;
-    public bool freeGamesTriggered;
-    public int awardedSpins;
-    public string boxId;                            // Which mystery box the server picked ("red"/"yellow"/"blue"/"green")
-    // Running total for the free-games round. Nullable so an absent field can't be read as a real
-    // 0 and blank out a round that has already paid — the same trap freeSpinsMultiplier avoids.
-    public double? freeSpinTotalWin;
+    public ServerFreeGameResult freeGame;
+    public ServerHoldAndSpinResult holdAndSpin;
 }
 
-// The bonus/scatter symbol landing that triggers free games. JSON key is "bonus".
 [Serializable]
-public class ServerBonusResult
+public class ServerFreeGameResult
 {
+    public bool isFreeGame;
+    public int freeGameCount;
+    public bool freeGameAdded;
+    public string gameType;
+    public int currentGameIndex;
+    public double totalRoundWin;
+}
+
+[Serializable]
+public class ServerHoldAndSpinResult
+{
+    public bool active;
     public bool triggered;
-    public int bonusCount;
-    public List<List<int>> positions;               // [row, col] pairs, row in the padded 0-4 space
-    public double award;                            // Cash paid by the bonus symbols themselves
+    public int spinsRemaining;
+    public int orbCount;
+    public int newOrbCount;
+    public double totalOrbPayout;
 }
 
-// Dormant CNY-era result models — no longer referenced by ServerPayload, kept because
-// SpinResult.uSpinData/moneyBagData (also dormant) still use these detail types.
-[Serializable]
-public class ServerUSpinResult
-{
-    public bool triggered;
-    public ServerUSpinResultDetail result;
-}
+#endregion
 
-[Serializable]
-public class ServerUSpinResultDetail
-{
-    public int sliceIndex;
-    public string type;
-    public double multiplierAwarded;
-    public int freeGamesAwarded;
-    public double winInCash;
-}
-
-[Serializable]
-public class ServerMoneyBagResult
-{
-    public bool triggered;
-    public ServerMoneyBagResultDetail result;
-}
-
-[Serializable]
-public class ServerMoneyBagResultDetail
-{
-    public int pickedIndex;
-    public List<int> revealed;
-    public int creditsAwarded;
-    public double winInCash;
-}
-
-[Serializable]
-public class ServerFreeGamesResult
-{
-    public bool triggered;
-    public int totalAwarded;
-    public int played;
-    public double totalFreeGamesWin;
-}
-
-// ============================================================================
-// Client-Side Spin Request
-// ============================================================================
+#region Client-Side Spin Request
 
 [Serializable]
 public class SpinRequest
@@ -291,12 +204,10 @@ public class SpinRequest
 [Serializable]
 public class SpinPayload
 {
+    // betIndex is the only field with a confirmed effect. The server owns free-spin state, so
+    // there is no isFreeSpin flag to send any more.
     public int betIndex;
-    public bool isFreeSpin;
 }
-
-
-
 
 #endregion
 
@@ -305,34 +216,30 @@ public class SpinPayload
 [Serializable]
 public class GameConfig
 {
-    public int reelCount = 3;
-    public int rowCount = 3;               // Active rows per reel (the server sends 5 total per reel; rows 0/4 are decorative padding, not represented here)
-    public int totalResponseRowCount = 5;  // Total rows per reel in the raw server response, including decorative padding
-    public int symbolCount = 8;
-    public int paylineCount = 27;
-    public int activeLine = 1;             // Number of active paylines — this IS the per-line-bet multiplier for total bet
+    public int reelCount = 5;
+    public int rowCount = 3;
+    // Golden Dynasty sends exactly the rows it plays, so this always equals rowCount and the
+    // active-row offset derived from it is always 0. Retained only so SlotView still compiles;
+    // it and the padding concept come out with the SlotView pass.
+    public int totalResponseRowCount = 3;
+
+    // Number of paylines, and equally the per-line-bet multiplier: total bet = bet * activeLine.
+    public int activeLine = 50;
+
     public List<List<int>> paylines;
     public List<double> availableBets;
     public List<SymbolInfo> symbols;
 
-    // Wild configuration
-    public int wildSymbolId = 1;       // 2xWild (1)
+    // Resolved from the init symbol table. -1 means "not present", so an unresolved role can never
+    // collide with a real symbol id the way a 0 default would.
+    public int wildSymbolId = -1;
+    public int scatterSymbolId = -1;
+    public int orbSymbolId = -1;
+    public int mysterySymbolId = -1;
 
-    // Scatter configuration
-    public int scatterSymbolId = 0;    // Bonus is ID 0
-
-    // Blank/filler configuration. Defaults to 7 to match the current symbol table, but is
-    // overwritten from the server's "blank" group in ConvertToGameConfig.
-    public int blankSymbolId = 7;
-
-    public int betMultiplier = 1;          // Unused by any real gameplay calc — kept only for UI-compile safety
-    public int maxWinMultiplier = 10000;   // Unused by any real gameplay calc — kept only for UI-compile safety
-    public int minWinMultiplier = 10;      // Unused by any real gameplay calc — kept only for UI-compile safety
-    public int initialFreeSpins = 12;      // Unused by any real gameplay calc — kept only for UI-compile safety
-    public ExtraSpinsData extraSpinsData; // Keep to avoid compilation error in UI
-
-    // Dormant — no longer populated from real server data (see InitDataConverter), kept for UI-compile safety
-    public List<USpinSegment> uSpinSegments;
+    // No blank/filler symbol exists in this game. Retained at -1 (matches nothing) so SlotView's
+    // remaining blank guards stay inert until they are removed with the SlotView pass.
+    public int blankSymbolId = -1;
 }
 
 [Serializable]
@@ -340,12 +247,21 @@ public class SymbolInfo
 {
     public int id;
     public string name;
+    public string displayName;
+    // Descending from a full-reel match: index 0 = reelCount-of-a-kind, 1 = one fewer, and so on.
     public List<double> multipliers;
+    // Scatter only; paid on total bet rather than per line.
+    public List<double> scatterMultipliers;
+
     public bool isWild;
     public bool isScatter;
-    // Filler symbol — never pays, never animates, and is not clickable for an info card.
-    public bool isBlank;
-    public int wildMultiplier = 1;
+    public bool isOrb;
+    public bool isMystery;
+    // Straight from the server's isSpecialSymbol — true for all four of the above.
+    public bool isSpecial;
+
+    // Fewest matching symbols that pay, derived from the paytable's length. 0 when the symbol has
+    // no line paytable at all (Wild, Orb, Mystery).
     public int minMatch;
 }
 
@@ -363,27 +279,27 @@ public class PlayerData
 [Serializable]
 public class SpinResult
 {
-    public List<List<int>> resultMatrix;  // Client uses int matrix
+    // Column-major: [reel][row], the transpose of the server's row-major matrix.
+    public List<List<int>> resultMatrix;
     public double winAmount;
     public double grandTotalWin;
     public List<WinLine> winLines;
     public PlayerData playerData;
+
+    // Feature state is parsed off the wire but deliberately not mapped through yet, so every
+    // feature stays gated off while the base game is brought up. These stay null/default until
+    // Free Games and Hold & Spin are designed.
     public FreeSpinData freeSpinData;
     public ScatterData scatterData;
-    public OverlayScatterData overlayScatterData; // Keep for safety/UI compilation
-    public Dictionary<string, int> stickyWilds;  // Keep for safety/UI compilation
+    public OverlayScatterData overlayScatterData;
+    public Dictionary<string, int> stickyWilds;
 
-    // Per-response free spin facts. Spins used and total awarded are still GameManager's to track —
-    // the wire format doesn't carry them — but the round's total win now comes from the server.
     public int serverSpinsRemaining;
     public bool isRoundOver;
-    // Informational only — the server has already applied this to winAmount. Never multiply by it.
     public double? freeSpinsMultiplier;
-    // The round's running total, server-authoritative. Replaced client-side accumulation, which
-    // drifted whenever a response was missed or the socket reconnected mid-round.
     public double? serverFreeSpinTotalWin;
 
-    // Dormant — CNY-era wheel/moneybag features, never populated from real server data
+    // Dormant CNY-era holdovers — never populated. Queued for removal in TODO.md "Cleanup".
     public USpinResultData uSpinData;
     public MoneyBagResultData moneyBagData;
 
@@ -407,8 +323,11 @@ public class SpinResult
 public class WinLine
 {
     public int lineId;
+    // Not resolvable from the wire data: the server reports which cells a line covers, not which
+    // symbol paid, and wild substitution means the first cell is not reliably the paying symbol.
     public int symbolId;
-    public List<int> positions;  // Flat list: [row * reelCount + col], row in local active-row space (0..rowCount-1)
+    // Flat indices into the active grid: row * reelCount + col.
+    public List<int> positions;
     public double winAmount;
 }
 
@@ -419,7 +338,7 @@ public class FreeSpinData
     public int spinsAwarded;
     public int remainingSpins;
     public bool isBought;
-    public string boxId;   // Which mystery box the server picked; presentation only
+    public string boxId;
 }
 
 [Serializable]
@@ -495,8 +414,7 @@ public enum SpinSpeed
 
 public enum WinPopupType
 {
-    BigWin              // Win at or above GameManager.bigWinMultiplierThreshold
-    // Free-games trigger/complete presentation lives in FreeGameView, not this popup.
+    BigWin
 }
 
 #endregion
@@ -504,98 +422,129 @@ public enum WinPopupType
 #region Helper Classes for Conversion
 
 /// <summary>
-/// Converts server data to client GameConfig
+/// The single seam between server JSON and client types. Wire shapes change here and nowhere else,
+/// so the view and controller layers never see a backend revision.
 /// </summary>
 public static class InitDataConverter
 {
     internal static GameConfig ConvertToGameConfig(InitData serverData)
     {
-        int derivedReelCount = (serverData.gameData?.lines != null && serverData.gameData.lines.Count > 0 && serverData.gameData.lines[0] != null)
-            ? serverData.gameData.lines[0].Count
-            : 3;
+        var gameData = serverData?.gameData;
+        var serverSymbols = serverData?.uiData?.paylines?.symbols;
+
+        int reelCount = (gameData?.lines != null && gameData.lines.Count > 0 && gameData.lines[0] != null)
+            ? gameData.lines[0].Count
+            : 5;
+
+        int lineCount = gameData?.lines?.Count ?? 0;
+        int totalLines = (gameData != null && gameData.totalLines > 0) ? gameData.totalLines : lineCount;
 
         var config = new GameConfig
         {
-            reelCount = derivedReelCount,
+            reelCount = reelCount,
             rowCount = 3,
-            symbolCount = serverData.uiData.paylines.symbols.Count,
-            paylineCount = serverData.gameData.totalLines,
-            activeLine = serverData.gameData.activeLine,
-            paylines = serverData.gameData.lines,
-            availableBets = serverData.gameData.bets,
+            totalResponseRowCount = 3,
+            activeLine = totalLines,
+            paylines = gameData?.lines,
+            availableBets = gameData?.bets,
             symbols = new List<SymbolInfo>()
         };
 
-        foreach (var serverSymbol in serverData.uiData.paylines.symbols)
+        if (serverSymbols == null)
         {
+            UnityEngine.Debug.LogError("[InitDataConverter] Init carried no symbol table — symbol art and paytables will be unresolved.");
+            return config;
+        }
+
+        foreach (var serverSymbol in serverSymbols)
+        {
+            if (serverSymbol == null) continue;
+
             var symbolInfo = new SymbolInfo
             {
                 id = serverSymbol.id,
                 name = serverSymbol.name,
-                multipliers = new List<double>(),
-                isWild = serverSymbol.group == "wild",
-                // The server calls the free-games trigger symbol group "bonus"; "scatter" is the
-                // CNY-era name this field still carries. Matching the wrong string left isScatter
-                // permanently false, so SymbolInfoCard rendered Bonus as an ordinary symbol with a
-                // 0 payout instead of its "3 or more trigger Free Games" text, and scatterSymbolId
-                // was never assigned — it only held the right id because its default happens to be 0.
-                isScatter = serverSymbol.group == "bonus",
-                isBlank = serverSymbol.group == "blank",
-                minMatch = serverSymbol.minMatch
+                displayName = string.IsNullOrEmpty(serverSymbol.displayName) ? serverSymbol.name : serverSymbol.displayName,
+                multipliers = serverSymbol.multiplier ?? new List<double>(),
+                scatterMultipliers = serverSymbol.scatterMultiplier ?? new List<double>(),
+                isSpecial = serverSymbol.isSpecialSymbol
             };
 
-            // Store the flat payout value for the info page (3-reel fixed-payline game — one payout per symbol, not a per-match-count table)
-            symbolInfo.multipliers.Add(serverSymbol.payout);
+            // -- STOPGAP ---------------------------------------------------------------------
+            // The init flags a symbol as special but never says which kind, so the four roles are
+            // told apart by matching the server's stable "name". This breaks silently if a symbol
+            // is renamed, reordered or localized. Swap this block for serverSymbol.type once the
+            // backend sends it — those values already exist in Assets/Scripts/Config/gdn_config.json.
+            // Tracked in TODO.md under "Pending backend".
+            switch ((serverSymbol.name ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "wild": symbolInfo.isWild = true; break;
+                case "scatter": symbolInfo.isScatter = true; break;
+                case "orb": symbolInfo.isOrb = true; break;
+                case "mystery": symbolInfo.isMystery = true; break;
+            }
+            // --------------------------------------------------------------------------------
+
+            // A symbol the server calls special that we failed to place is worth shouting about:
+            // it means a rename has already happened and the stopgap above has gone stale.
+            if (symbolInfo.isSpecial && !symbolInfo.isWild && !symbolInfo.isScatter && !symbolInfo.isOrb && !symbolInfo.isMystery)
+            {
+                UnityEngine.Debug.LogError($"[InitDataConverter] Symbol id {symbolInfo.id} (name '{symbolInfo.name}') is flagged special but matches no known role. The name-matching stopgap needs updating.");
+            }
+
+            symbolInfo.minMatch = DeriveMinMatch(symbolInfo.multipliers.Count, reelCount);
+
             config.symbols.Add(symbolInfo);
 
-            if (symbolInfo.isWild)
-            {
-                config.wildSymbolId = symbolInfo.id;
-            }
-            if (symbolInfo.isScatter)
-            {
-                config.scatterSymbolId = symbolInfo.id;
-            }
-            if (symbolInfo.isBlank)
-            {
-                config.blankSymbolId = symbolInfo.id;
-            }
+            if (symbolInfo.isWild) config.wildSymbolId = symbolInfo.id;
+            if (symbolInfo.isScatter) config.scatterSymbolId = symbolInfo.id;
+            if (symbolInfo.isOrb) config.orbSymbolId = symbolInfo.id;
+            if (symbolInfo.isMystery) config.mysterySymbolId = symbolInfo.id;
         }
 
         return config;
+    }
+
+    // The paytable runs descending from a full-reel match, so its length says how far down the
+    // match counts go: reelCount - (tierCount - 1). Verified against a live spin — Ace's
+    // [75, 20, 5] paid 20 for four-of-a-kind, so index 1 is 4-of-a-kind and the table bottoms out
+    // at 3. Warriors' 4-entry table is the only one reaching 2.
+    private static int DeriveMinMatch(int tierCount, int reelCount)
+    {
+        if (tierCount <= 0) return 0;
+        return Math.Max(1, reelCount - tierCount + 1);
     }
 
     internal static PlayerData ConvertToPlayerData(ServerPlayer serverPlayer, int defaultBetIndex = 0)
     {
         return new PlayerData
         {
-            balance = serverPlayer.balance,
+            balance = serverPlayer != null ? serverPlayer.balance : 0,
             currentBetIndex = defaultBetIndex
         };
     }
 
     /// <summary>
-    /// Converts server response to client SpinResult
+    /// Converts one spin response into the client's SpinResult.
+    /// betAmount is accepted for signature stability but no longer used: the server always sends
+    /// the post-spin balance, and the fallback below works off the already-deducted local balance.
     /// </summary>
     internal static SpinResult ConvertServerResponseToSpinResult(ServerSpinResponse serverResponse, double currentBalance, double betAmount, GameConfig gameConfig)
     {
-        double winAmountVal = serverResponse.payload.totalWin;
-        double activeLine = (gameConfig != null && gameConfig.activeLine > 0) ? gameConfig.activeLine : 27;
-        double totalPay = betAmount * activeLine;
-        double newBalance = serverResponse.player?.balance ?? CalculateNewBalance(currentBalance, totalPay, winAmountVal);
+        var payload = serverResponse?.payload;
 
-        var features = serverResponse.payload.features;
-        bool freeGamesTriggered = features != null && features.freeGamesTriggered;
-        bool bonusTriggered = features != null && features.bonus != null && features.bonus.triggered;
-        int awardedSpins = features != null ? features.awardedSpins : 0;
-        string boxId = features != null ? features.boxId : null;
+        // Verified against a live spin: balance moved by (win - totalBet) exactly, and
+        // currentWinning equalled the sum of lineWins. scatterWin is NOT part of it and will have
+        // to be added here once its behaviour is confirmed.
+        double winAmountVal = payload?.currentWinning ?? 0;
+        double newBalance = serverResponse?.player?.balance ?? CalculateNewBalance(currentBalance, winAmountVal);
 
-        var result = new SpinResult
+        return new SpinResult
         {
-            resultMatrix = ConvertReelsToMatrix(serverResponse.payload.reels, gameConfig),
+            resultMatrix = ConvertMatrixToColumns(serverResponse?.matrix, gameConfig),
             winAmount = winAmountVal,
             grandTotalWin = winAmountVal,
-            winLines = ConvertWinningLines(serverResponse.payload.winningLines, gameConfig),
+            winLines = ConvertLineWins(payload?.lineWins, gameConfig),
 
             playerData = new PlayerData
             {
@@ -603,57 +552,35 @@ public static class InitDataConverter
                 currentBetIndex = 0
             },
 
-            freeSpinData = freeGamesTriggered
-                ? new FreeSpinData
-                {
-                    isTriggered = true,
-                    spinsAwarded = awardedSpins,
-                    remainingSpins = awardedSpins,
-                    isBought = false,
-                    boxId = boxId
-                }
-                : null,
-
-            scatterData = bonusTriggered
-                ? new ScatterData
-                {
-                    isTriggered = true,
-                    scatterCount = features.bonus.bonusCount,
-                    winAmount = features.bonus.award
-                }
-                : null,
-
+            // Features stay gated off for base-game bring-up. GameManager keys its free-spin entry
+            // off freeSpinData being non-null, so leaving these null is what holds the old
+            // Sizzling-era pick-a-box flow shut.
+            freeSpinData = null,
+            scatterData = null,
             overlayScatterData = null,
             stickyWilds = null,
 
-            serverSpinsRemaining = serverResponse.payload.freeSpinsRemaining,
-            // Only a *free* spin can end the round. The first base-game spin after a round still
-            // reports freeSpinsRemaining: 0, and without the isFreeSpin guard every ordinary spin
-            // would look like a round ending.
-            isRoundOver = serverResponse.payload.isFreeSpin && serverResponse.payload.freeSpinsRemaining <= 0,
-            freeSpinsMultiplier = serverResponse.payload.freeSpinsMultiplier,
-            serverFreeSpinTotalWin = features?.freeSpinTotalWin,
+            serverSpinsRemaining = 0,
+            isRoundOver = false,
+            freeSpinsMultiplier = null,
+            serverFreeSpinTotalWin = null,
 
             uSpinData = null,
             moneyBagData = null
         };
-
-        return result;
     }
 
-    // Server sends totalResponseRowCount rows per reel (row-major: reels[row][col]). Rows 0 and
-    // totalResponseRowCount-1 are decorative rows shown above/below the payline area, but they
-    // are still real backend data — all rows are passed through unsliced, in server order.
-    // SlotView is responsible for placing each row in the correct on-screen image slot.
-    private static List<List<int>> ConvertReelsToMatrix(List<List<string>> serverReels, GameConfig gameConfig)
+    // Server matrix is row-major (matrix[row][col]); the client works column-major ([reel][row]),
+    // so this transposes. No padding rows to skip — every row the server sends is live.
+    private static List<List<int>> ConvertMatrixToColumns(List<List<string>> serverMatrix, GameConfig gameConfig)
     {
-        int reelCount = gameConfig != null ? gameConfig.reelCount : 3;
-        int totalResponseRowCount = gameConfig != null ? gameConfig.totalResponseRowCount : 5;
+        int reelCount = gameConfig != null ? gameConfig.reelCount : 5;
+        int rowCount = gameConfig != null ? gameConfig.rowCount : 3;
 
-        if (serverReels == null || serverReels.Count == 0)
+        if (serverMatrix == null || serverMatrix.Count == 0)
         {
-            UnityEngine.Debug.LogError("Invalid server reels: serverReels is null or empty");
-            return GenerateDefaultMatrix(reelCount, totalResponseRowCount);
+            UnityEngine.Debug.LogError("[InitDataConverter] Spin response carried no matrix.");
+            return GenerateDefaultMatrix(reelCount, rowCount);
         }
 
         var matrix = new List<List<int>>();
@@ -661,21 +588,19 @@ public static class InitDataConverter
         for (int col = 0; col < reelCount; col++)
         {
             var column = new List<int>();
-            for (int serverRow = 0; serverRow < totalResponseRowCount; serverRow++)
+            for (int row = 0; row < rowCount; row++)
             {
-                if (serverRow >= serverReels.Count || col >= serverReels[serverRow].Count)
+                if (row >= serverMatrix.Count || serverMatrix[row] == null || col >= serverMatrix[row].Count)
                 {
-                    UnityEngine.Debug.LogError($"Invalid server data at row {serverRow}, col {col}");
+                    UnityEngine.Debug.LogError($"[InitDataConverter] matrix has no cell at row {row}, col {col}.");
                     column.Add(0);
                     continue;
                 }
 
-                string symbolStr = serverReels[serverRow][col];
-                if (!int.TryParse(symbolStr, out int symbolId))
+                if (!int.TryParse(serverMatrix[row][col], out int symbolId))
                 {
-                    UnityEngine.Debug.LogError($"Failed to parse symbol: {symbolStr}");
-                    column.Add(0);
-                    continue;
+                    UnityEngine.Debug.LogError($"[InitDataConverter] Could not parse symbol at row {row}, col {col}.");
+                    symbolId = 0;
                 }
 
                 column.Add(symbolId);
@@ -684,6 +609,58 @@ public static class InitDataConverter
         }
 
         return matrix;
+    }
+
+    // The server names the reels a win covers; the row each of those reels landed on lives in the
+    // payline definition. Resolving that here rather than in SlotView keeps payline knowledge in
+    // the model and hands the view the same flat indices it already consumes.
+    private static List<WinLine> ConvertLineWins(List<ServerLineWin> lineWins, GameConfig gameConfig)
+    {
+        var winLines = new List<WinLine>();
+        if (lineWins == null) return winLines;
+
+        int reelCount = gameConfig != null ? gameConfig.reelCount : 5;
+        int rowCount = gameConfig != null ? gameConfig.rowCount : 3;
+        var paylines = gameConfig?.paylines;
+
+        foreach (var lineWin in lineWins)
+        {
+            if (lineWin == null) continue;
+
+            List<int> payline = (paylines != null && lineWin.lineIndex >= 0 && lineWin.lineIndex < paylines.Count)
+                ? paylines[lineWin.lineIndex]
+                : null;
+
+            if (payline == null)
+            {
+                UnityEngine.Debug.LogError($"[InitDataConverter] Win references payline {lineWin.lineIndex}, outside the lines sent at init — win not shown.");
+                continue;
+            }
+
+            var flatPositions = new List<int>();
+            if (lineWin.positions != null)
+            {
+                foreach (int reelIndex in lineWin.positions)
+                {
+                    if (reelIndex < 0 || reelIndex >= reelCount || reelIndex >= payline.Count) continue;
+
+                    int row = payline[reelIndex];
+                    if (row < 0 || row >= rowCount) continue;
+
+                    flatPositions.Add(row * reelCount + reelIndex);
+                }
+            }
+
+            winLines.Add(new WinLine
+            {
+                lineId = lineWin.lineIndex,
+                symbolId = -1,
+                positions = flatPositions,
+                winAmount = lineWin.win
+            });
+        }
+
+        return winLines;
     }
 
     private static List<List<int>> GenerateDefaultMatrix(int reelCount, int rowCount)
@@ -701,51 +678,10 @@ public static class InitDataConverter
         return matrix;
     }
 
-    // Converts fixed-payline win data. winningLines[].positions are [row, col] pairs in the
-    // server's padded 0..totalResponseRowCount-1 space — offset back to the same local active-row
-    // space ConvertReelsToMatrix uses before flattening.
-    private static List<WinLine> ConvertWinningLines(List<ServerWinningLine> serverWinningLines, GameConfig gameConfig)
+    // currentBalance already reflects StartSpin()'s optimistic upfront deduction of the total bet,
+    // so only the win is added back. Only reached if the server omits a balance.
+    private static double CalculateNewBalance(double currentBalance, double winAmount)
     {
-        var winLines = new List<WinLine>();
-        if (serverWinningLines == null) return winLines;
-
-        int reelCount = gameConfig != null ? gameConfig.reelCount : 3;
-        int rowCount = gameConfig != null ? gameConfig.rowCount : 3;
-        int totalResponseRowCount = gameConfig != null ? gameConfig.totalResponseRowCount : 5;
-        int activeRowStart = (totalResponseRowCount - rowCount) / 2;
-
-        foreach (var winningLine in serverWinningLines)
-        {
-            var flatPositions = new List<int>();
-            if (winningLine.positions != null)
-            {
-                foreach (var pos in winningLine.positions)
-                {
-                    if (pos == null || pos.Count < 2) continue;
-                    int serverRow = pos[0];
-                    int col = pos[1];
-                    int localRow = serverRow - activeRowStart;
-                    int flatIndex = localRow * reelCount + col;
-                    flatPositions.Add(flatIndex);
-                }
-            }
-
-            winLines.Add(new WinLine
-            {
-                lineId = winningLine.lineIndex,
-                symbolId = -1, // Not provided directly by fixed-line wins — positions/lineId identify the win
-                positions = flatPositions,
-                winAmount = winningLine.payout
-            });
-        }
-
-        return winLines;
-    }
-
-    private static double CalculateNewBalance(double currentBalance, double totalPay, double winAmount)
-    {
-        // currentBalance already reflects StartSpin()'s optimistic upfront deduction of totalPay —
-        // don't subtract it again here, only add back the win.
         return currentBalance + winAmount;
     }
 }
