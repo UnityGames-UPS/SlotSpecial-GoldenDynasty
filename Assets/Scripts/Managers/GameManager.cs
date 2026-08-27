@@ -435,12 +435,12 @@ public class GameManager : MonoBehaviour
     {
         lastResult = result;
 
-        // Hand the result to SlotView as soon as it's known, so it can write the display-block
-        // sprites early (while still safely off-screen mid-spin) instead of at stop-time.
-        if (slotView != null && result.resultMatrix != null)
-        {
-            slotView.PreloadResultSprites(result.resultMatrix);
-        }
+        // The result is not handed to SlotView here. It writes the display-block sprites itself
+        // when each reel lands, in StopSingleReel — in the same frame as the landing position
+        // snap, so the swap is never on screen. An earlier "preload" wrote them mid-spin as well,
+        // on a hand-tuned delay; it duplicated the landing write, was visible whenever the delay
+        // missed its narrow window, and telegraphed the result each time the icons swept back
+        // through the reel. Removed rather than retuned.
 
         // Update the round's numbers as soon as the response lands so the displays never lag the
         // reels. Everything here is per-spin fact from the server plus our own running totals.

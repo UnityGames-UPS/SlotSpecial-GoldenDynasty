@@ -30,6 +30,49 @@ public class SlotView : MonoBehaviour
     [SerializeField] private Sprite spriteJ;                  // ID: 11 (low — "Jack")
     [SerializeField] private Sprite sprite10;                 // ID: 12 (low — "Ten")
 
+    // Symbols drawn at 1.5x, which take largeSymbolSize instead of normalSymbolSize.
+    // Kept next to the sprite fields on purpose: both are id-keyed maps of the same symbol table,
+    // so if the backend ever reorders it again they have to be corrected together — and the sprite
+    // mapping fails loudly (every symbol showing the wrong art) the moment that happens.
+    private static readonly HashSet<int> LargeSymbolIds = new HashSet<int>
+    {
+        0, // Wild
+        4,  // Warriors
+        5,  // Lady
+        7   // Drum
+    };
+
+    // Playback speed per symbol, applied wherever that symbol's clip is assigned.
+    //
+    // NOT frames per second. ImageAnimation derives its frame delay as
+    // (1/24) * frameCount / AnimationSpeed, so the same value plays a long clip more slowly than a
+    // short one — which is why each symbol needs its own, tuned by eye against its own art.
+    //
+    // Every symbol gets a value on every write. The win-layer components are reused from spin to
+    // spin, so leaving one untouched would silently inherit whatever the previous symbol had set
+    // on that slot.
+    //
+    // All 13 are listed explicitly, so the fallback below is only reached if the backend ever sends
+    // an id this table doesn't know about.
+    private const float DefaultSymbolAnimationSpeed = 20f;
+    //Animation Speeds
+    private static readonly Dictionary<int, float> SymbolAnimationSpeeds = new Dictionary<int, float>
+    {
+        { 0,  25f },  // Wild
+        { 1,  20f },  // Scatter
+        { 2,  20f },  // Orb
+        { 3,  20f },  // Mystery
+        { 4,  20f },  // Warriors
+        { 5,  25f },  // Lady
+        { 6,  20f },  // Book
+        { 7,  40f },  // Drum
+        { 8,  15f },  // A
+        { 9,  15f },  // K
+        { 10, 15f },  // Q
+        { 11, 15f },  // J
+        { 12, 15f }   // 10
+    };
+
     // Internal array built from named sprites
     private Sprite[] symbolSprites;
 
@@ -58,20 +101,28 @@ public class SlotView : MonoBehaviour
     [Header("Reel Images")]
     [SerializeField] private List<ReelImages> reelImagesList;
 
-    [Header("Symbol Sizing")]
-    [Tooltip("Rect size used by every symbol except the Bonus.")]
-    [SerializeField] private Vector2 normalSymbolSize = new Vector2(335f, 275f);
-    [Tooltip("Rect size used for the Bonus symbol, whose art is drawn at a different scale. Applied on reel icons and win-layer slots alike.")]
-    [SerializeField] private Vector2 bonusSymbolSize = new Vector2(350f, 350f);
+    // ── Symbol sizing / reel pitch ──────────────────────────────────────────────────────────────
+    // Deliberately NOT [SerializeField], for the same reason FreeGameView's timing constants are
+    // not: while these were serialized, the scene's saved values silently won over anything changed
+    // here, so retuning in code appeared to do nothing. Code is the single source of truth now. The
+    // trade is that they can no longer be nudged in Play mode — each change is a recompile.
+
+    // Rect size used by every symbol except those in LargeSymbolIds.
+    private Vector2 normalSymbolSize = new Vector2(175f, 175f);
+    // Rect size for symbols whose art is drawn at 1.5x. Applied on reel icons and win-layer slots
+    // alike. Note these stand 262.5 tall against a 175 pitch, so they overlap their vertical
+    // neighbours by ~44px each side — intentional art bleed, but it also means they swallow clicks
+    // aimed at the symbols above and below them.
+    private Vector2 largeSymbolSize = new Vector2(262.5f, 262.5f);
+
+    // Must match the actual icon pitch in the scene. Drives the spin loop's travel distance, which
+    // has to be a whole number of pitches or the loop's wrap-around is visible.
+    private float symbolHeight = 175f;
 
     [Header("Spin Settings")]
-    [Tooltip("Must match the actual icon pitch in the scene (275). Drives the spin loop's travel distance, which has to be a whole number of pitches or the loop's wrap-around is visible.")]
-    [SerializeField] private float symbolHeight = 275f;
     [SerializeField] private float spinSpeed = 6000f;
     [SerializeField] private float reelStartStagger = 0.08f;
     [SerializeField] private float reelStopStagger = 0.12f;
-    [Tooltip("Fixed delay after a spin starts before it's safe to write the real result into the display-block icons — long enough for them to have scrolled fully off-screen. Hand-tuned starting point (5-row block / spinSpeed); retune here if spinSpeed or reel spacing changes.")]
-    [SerializeField] private float resultPreloadDelay = 0.3f;
 
     [Header("Animation Settings - Casino Style")]
     [SerializeField] private float anticipationUpDistance = 20f;
@@ -148,9 +199,6 @@ public class SlotView : MonoBehaviour
     // when the round is actually over.
     private List<WinLine> lastWinLines;
 
-    private float lastSpinStartTime;
-    private Coroutine preloadResultCoroutine;
-
     // Which reel is being held back to tease a bonus this spin, or -1. Set before the reels start
     // stopping; StopSingleReel raises and clears the effect off its own landing events.
     private int anticipationReelIndex = -1;
@@ -167,15 +215,11 @@ public class SlotView : MonoBehaviour
         ? gameManager.gameConfig.reelCount
         : (reelTransforms != null ? reelTransforms.Length : 3);
 
-    // Active/paying row count (3).
+    // Row count (3). Every row the server sends is live and pays — there is no decorative padding
+    // in this game, so a row index means the same thing in the server payload, in
+    // currentDisplayMatrix, and in each reel's displayImages list. The Sizzling-era
+    // totalResponseRowCount / ActiveRowStart pair that translated between those spaces is gone.
     private int RowCount => (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.rowCount : 3;
-    // Full server row count, including the 2 decorative rows (5).
-    private int TotalResponseRowCount => (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.totalResponseRowCount : 5;
-    // Offset of the first active row within the full server row block (e.g. (5-3)/2 = 1).
-    // Mirrors GameDataModels.ConvertWinningLines' own independent activeRowStart calculation.
-    // Also used to index into each reel's displayImages list (5 entries, server-row order) to
-    // find the 3 active/paying rows within it.
-    private int ActiveRowStart => (TotalResponseRowCount - RowCount) / 2;
 
     #region Initialization
 
@@ -222,14 +266,12 @@ public class SlotView : MonoBehaviour
         {
             var reel = reelImagesList[col];
             if (reel == null || reel.displayImages == null) continue;
-            int activeRowStart = ActiveRowStart;
             int rowCount = RowCount;
             for (int row = 0; row < rowCount; row++)
             {
-                int displayIndex = activeRowStart + row;
-                if (displayIndex < reel.displayImages.Count && reel.displayImages[displayIndex] != null)
+                if (row < reel.displayImages.Count && reel.displayImages[row] != null)
                 {
-                    Image img = reel.displayImages[displayIndex];
+                    Image img = reel.displayImages[row];
                     SymbolButtonHandler btnHandler = img.GetComponent<SymbolButtonHandler>();
                     if (btnHandler == null)
                     {
@@ -262,24 +304,13 @@ public class SlotView : MonoBehaviour
             return;
         }
 
-        int matrixRow = ActiveRowStart + row;
+        int matrixRow = row;
         if (currentDisplayMatrix == null || col >= currentDisplayMatrix.Count || matrixRow < 0 || matrixRow >= currentDisplayMatrix[col].Count)
         {
             return;
         }
 
         int symbolId = currentDisplayMatrix[col][matrixRow];
-
-        // Blanks are filler, not symbols — they have nothing to show. Clicking one closes any open
-        // card rather than ignoring the click, matching the isSpinning guard above: a blank reads as
-        // empty space, so clicking it should behave like clicking away from a symbol.
-        int blankId = (gameManager != null && gameManager.gameConfig != null)
-            ? gameManager.gameConfig.blankSymbolId : 7;
-        if (symbolId == blankId)
-        {
-            if (symbolInfoCard != null) symbolInfoCard.HideCard();
-            return;
-        }
 
         if (symbolInfoCard != null)
         {
@@ -333,15 +364,15 @@ public class SlotView : MonoBehaviour
 
     private void InitializeReels()
     {
-        middlePosition = 0f;
+        middlePosition = -67.4f;
 
-        int totalResponseRowCount = TotalResponseRowCount;
+        int rowCount = RowCount;
 
         currentDisplayMatrix = new List<List<int>>();
         for (int col = 0; col < ReelCount; col++)
         {
             var defaultCol = new List<int>();
-            for (int r = 0; r < totalResponseRowCount; r++)
+            for (int r = 0; r < rowCount; r++)
             {
                 defaultCol.Add(0);
             }
@@ -353,11 +384,11 @@ public class SlotView : MonoBehaviour
     {
         if (matrix == null || matrix.Count != ReelCount) return;
 
-        int totalResponseRowCount = TotalResponseRowCount;
+        int rowCount = RowCount;
 
         for (int col = 0; col < ReelCount; col++)
         {
-            if (matrix[col].Count != totalResponseRowCount) return;
+            if (matrix[col].Count != rowCount) return;
         }
 
         currentDisplayMatrix = matrix;
@@ -380,11 +411,11 @@ public class SlotView : MonoBehaviour
             return;
         }
 
-        int totalResponseRowCount = TotalResponseRowCount;
+        int rowCount = RowCount;
 
-        if (visibleSymbolIds == null || visibleSymbolIds.Count != totalResponseRowCount)
+        if (visibleSymbolIds == null || visibleSymbolIds.Count != rowCount)
         {
-            Debug.LogError($"SetReelSymbols: Invalid visibleSymbolIds count {visibleSymbolIds?.Count}, expected {totalResponseRowCount}");
+            Debug.LogError($"SetReelSymbols: Invalid visibleSymbolIds count {visibleSymbolIds?.Count}, expected {rowCount}");
             return;
         }
 
@@ -416,71 +447,29 @@ public class SlotView : MonoBehaviour
     {
         if (columnIndex >= reelImagesList.Count) return;
 
-        int totalResponseRowCount = TotalResponseRowCount;
-        if (visibleSymbolIds == null || visibleSymbolIds.Count != totalResponseRowCount) return;
+        int rowCount = RowCount;
+        if (visibleSymbolIds == null || visibleSymbolIds.Count != rowCount) return;
 
         var reel = reelImagesList[columnIndex];
         if (reel.displayImages == null) return;
 
-        for (int row = 0; row < totalResponseRowCount; row++)
+        for (int row = 0; row < rowCount; row++)
         {
             if (row < reel.displayImages.Count && reel.displayImages[row] != null)
             {
                 int symbolId = visibleSymbolIds[row];
-                // All five display icons, not just the three active rows: the bottom decorative
-                // icon is drawn above the lowest active symbol and overlaps its lower half, so a
-                // blank there blocks clicks exactly like an in-band one.
                 ApplySymbol(reel.displayImages[row], symbolId, manageRaycast: true);
             }
         }
     }
 
-    // Writes the real result into the display block as soon as it's known, instead of waiting
-    // until the reel is told to stop — timed so the write happens while those icons are still
-    // safely off-screen mid-spin, avoiding a visible "pop" of new content appearing. StopSingleReel
-    // still writes the same values again when the reel actually lands (a deliberate, harmless
-    // safety net for the early-manual-stop case, where the safe-delay window may not have
-    // elapsed yet).
-    internal void PreloadResultSprites(List<List<int>> resultMatrix)
+    // Falls back rather than throwing on an unlisted id: only symbols being retuned need an entry,
+    // and an id with no entry is the normal case, not an error.
+    private static float GetSymbolAnimationSpeed(int symbolId)
     {
-        if (resultMatrix == null) return;
-
-        if (preloadResultCoroutine != null)
-        {
-            StopCoroutine(preloadResultCoroutine);
-        }
-        preloadResultCoroutine = StartCoroutine(PreloadResultSpritesRoutine(resultMatrix));
-    }
-
-    private IEnumerator PreloadResultSpritesRoutine(List<List<int>> resultMatrix)
-    {
-        float waitTime = RemainingPreloadDelay();
-        if (waitTime > 0f)
-        {
-            yield return new WaitForSeconds(waitTime);
-        }
-
-        for (int col = 0; col < ReelCount; col++)
-        {
-            if (col < resultMatrix.Count)
-            {
-                WriteDisplayBlockSprites(col, resultMatrix[col]);
-            }
-        }
-
-        preloadResultCoroutine = null;
-    }
-
-    // How long (in seconds) to wait after a spin starts before it's safe to write the real result
-    // sprites into the display-block icons without the swap being visible — resultPreloadDelay is
-    // a hand-tuned constant (all 3 reels share the same buffer geometry, so one shared value is
-    // safe for all of them) rather than computed from reel geometry. We only wait for whatever's
-    // left of that window relative to how long the spin has already been running — if the result
-    // arrives late (window already elapsed), no extra delay is added.
-    private float RemainingPreloadDelay()
-    {
-        float elapsed = Time.time - lastSpinStartTime;
-        return Mathf.Max(0f, resultPreloadDelay - elapsed);
+        return SymbolAnimationSpeeds.TryGetValue(symbolId, out float speed)
+            ? speed
+            : DefaultSymbolAnimationSpeed;
     }
 
     private Sprite GetSymbolSprite(int symbolId)
@@ -512,30 +501,25 @@ public class SlotView : MonoBehaviour
 
         image.sprite = GetSymbolSprite(symbolId);
 
-        int bonusId = (gameManager != null && gameManager.gameConfig != null)
-            ? gameManager.gameConfig.scatterSymbolId
-            : 0;
+        // Sizing is art-driven, not role-driven: five symbols are drawn at 1.5x and the rest are
+        // not, which is why this reads a set of ids rather than keying off scatterSymbolId the way
+        // it did when exactly one symbol needed its own size.
+        image.rectTransform.sizeDelta = LargeSymbolIds.Contains(symbolId) ? largeSymbolSize : normalSymbolSize;
 
-        image.rectTransform.sizeDelta = (symbolId == bonusId) ? bonusSymbolSize : normalSymbolSize;
-
-        // Blanks must not catch clicks. Symbols always have a blank between them, so real symbols
-        // sit two cells apart (275) and their 275-tall rects tile exactly — a symbol can never
-        // overlap another symbol. The blanks are the only rects that straddle two neighbours, so
-        // while they raycast they swallow clicks meant for the symbol above or below and the info
-        // card never opens. Turning it back on is automatic: every write lands here and sets the
-        // flag either way, so an icon that held a blank is clickable again the moment it's given
-        // a real symbol.
+        // Display icons must catch clicks so the symbol info card can open on them. This is set
+        // here rather than left to the scene so it can't be lost by an icon being re-authored.
         //
-        // Opt-in rather than unconditional, because the other two callers must not get this: the
+        // Opt-in rather than unconditional, because the other two callers must not get it: the
         // win-animation layer's slots are authored raycast-off and have to stay that way (they sit
         // above the reels during a win), and the scroll buffer has no info card to open.
+        //
+        // This used to switch on the blank symbol, which no longer exists — Sizzling 7s spaced its
+        // symbols with blanks whose oversized rects straddled two neighbours and swallowed their
+        // clicks. Golden Dynasty has no blanks, but note the four 262.5-tall symbols overlap their
+        // neighbours the same way, so the same click-stealing is possible from those.
         if (manageRaycast)
         {
-            int blankId = (gameManager != null && gameManager.gameConfig != null)
-                ? gameManager.gameConfig.blankSymbolId
-                : 7;
-
-            image.raycastTarget = symbolId != blankId;
+            image.raycastTarget = true;
         }
     }
 
@@ -571,15 +555,6 @@ public class SlotView : MonoBehaviour
 
         isSpinning = true;
         KillAllTweens();
-
-        // Cancel any leftover preload from a previous spin so it can't fire late and overwrite
-        // this new spin's icons mid-flight.
-        if (preloadResultCoroutine != null)
-        {
-            StopCoroutine(preloadResultCoroutine);
-            preloadResultCoroutine = null;
-        }
-        lastSpinStartTime = Time.time;
 
         DisableAllOverlays();
 
@@ -752,8 +727,7 @@ public class SlotView : MonoBehaviour
         return -1;
     }
 
-    // Bounded to the active/paying rows — a bonus sitting in a decorative row doesn't count
-    // toward a trigger, so it must not drive the tease either.
+    // Counts scatters in one reel column, bounded to the rows the grid actually shows.
     private int CountBonusInColumn(List<List<int>> matrix, int col)
     {
         if (matrix == null || col < 0 || col >= matrix.Count || matrix[col] == null) return 0;
@@ -761,11 +735,10 @@ public class SlotView : MonoBehaviour
         int bonusId = gameManager?.gameConfig != null ? gameManager.gameConfig.scatterSymbolId : 0;
         if (bonusId < 0) return 0;
 
-        int activeRowStart = ActiveRowStart;
-        int activeRowEnd = Mathf.Min(activeRowStart + RowCount, matrix[col].Count);
+        int rowEnd = Mathf.Min(RowCount, matrix[col].Count);
 
         int count = 0;
-        for (int row = activeRowStart; row < activeRowEnd; row++)
+        for (int row = 0; row < rowEnd; row++)
         {
             if (matrix[col][row] == bonusId) count++;
         }
@@ -815,9 +788,8 @@ public class SlotView : MonoBehaviour
         // ── Play reel-stop sound immediately when symbols lock in ──────────
         AudioManager.Instance?.PlayReelStop();
 
-        // Special-symbol landing cues for this column. Both are bounded to the active rows —
-        // a symbol in a decorative row neither pays nor counts toward a trigger, so it shouldn't
-        // make a sound either — and both fire at most once per reel, not once per symbol.
+        // Special-symbol landing cues for this column. Both fire at most once per reel, not once
+        // per symbol.
         if (currentDisplayMatrix != null && columnIndex < currentDisplayMatrix.Count)
         {
             bool hasWild = false;
@@ -825,10 +797,9 @@ public class SlotView : MonoBehaviour
             int wildId = gameManager?.gameConfig != null ? gameManager.gameConfig.wildSymbolId : 1;
             int bonusId = gameManager?.gameConfig != null ? gameManager.gameConfig.scatterSymbolId : 0;
             var column = currentDisplayMatrix[columnIndex];
-            int activeRowStart = ActiveRowStart;
-            int activeRowEnd = Mathf.Min(activeRowStart + RowCount, column.Count);
+            int rowEnd = Mathf.Min(RowCount, column.Count);
 
-            for (int r = activeRowStart; r < activeRowEnd; r++)
+            for (int r = 0; r < rowEnd; r++)
             {
                 if (column[r] == wildId) hasWild = true;
                 else if (column[r] == bonusId) hasBonus = true;
@@ -863,8 +834,6 @@ public class SlotView : MonoBehaviour
                     .SetEase(Ease.InOutQuad)
             );
 
-            quickStopSequence.OnComplete(() => PlayStopAnimationsForColumn(columnIndex));
-
             spinTweens[columnIndex] = quickStopSequence;
         }
         else
@@ -882,8 +851,6 @@ public class SlotView : MonoBehaviour
                         SetAnticipationEffect(anticipationReelIndex, false);
                         anticipationReelIndex = -1;
                     }
-
-                    PlayStopAnimationsForColumn(columnIndex);
                 });
 
             spinTweens[columnIndex] = stopTween;
@@ -909,7 +876,6 @@ public class SlotView : MonoBehaviour
                         middlePosition,
                         0
                     );
-                    PlayStopAnimationsForColumn(col);
                 }
             }
             
@@ -924,27 +890,6 @@ public class SlotView : MonoBehaviour
 
     #region Stop Symbol Animations
 
-    private void PlayStopAnimationsForColumn(int col)
-    {
-        if (currentDisplayMatrix == null || col >= currentDisplayMatrix.Count) return;
-
-        int activeRowStart = ActiveRowStart;
-        int rowCount = RowCount;
-        int wildId = gameManager?.gameConfig != null ? gameManager.gameConfig.wildSymbolId : 1;
-
-        // Bounded to active rows only — decorative rows never represent a landed/paying position.
-        for (int localRow = 0; localRow < rowCount; localRow++)
-        {
-            int matrixRow = activeRowStart + localRow;
-            if (matrixRow >= currentDisplayMatrix[col].Count) continue;
-
-            if (currentDisplayMatrix[col][matrixRow] == wildId)
-            {
-                AnimateSymbolSingleLoop(col, localRow, 1);
-            }
-        }
-    }
-
     // loopCount <= 0 means "animate indefinitely" — used by the free-games trigger so the scatters
     // keep playing through the whole intro/pick sequence. They're stopped by the first free spin's
     // StartSpin -> KillAllTweens -> KillWinTweens.
@@ -958,19 +903,16 @@ public class SlotView : MonoBehaviour
         int actualScatterId = gameManager?.gameConfig != null ? gameManager.gameConfig.scatterSymbolId : -1;
         if (actualScatterId < 0) return;
 
-        int activeRowStart = ActiveRowStart;
         int rowCount = RowCount;
 
-        // Bounded to active rows only — decorative rows never represent a landed/paying position.
         for (int col = 0; col < ReelCount; col++)
         {
             if (col >= currentDisplayMatrix.Count) continue;
             for (int localRow = 0; localRow < rowCount; localRow++)
             {
-                int matrixRow = activeRowStart + localRow;
-                if (matrixRow >= currentDisplayMatrix[col].Count) continue;
+                if (localRow >= currentDisplayMatrix[col].Count) continue;
 
-                if (currentDisplayMatrix[col][matrixRow] == actualScatterId)
+                if (currentDisplayMatrix[col][localRow] == actualScatterId)
                 {
                     AnimateSymbolSingleLoop(col, localRow, loopCount);
                 }
@@ -979,8 +921,6 @@ public class SlotView : MonoBehaviour
     }
 
     // Dormant CNY-era code (uSpinData is always null, never invoked — see GameDataModels).
-    // Reads currentDisplayMatrix with a raw row index (no ActiveRowStart offset) — would need
-    // the same active-row-space fix as PlayStopAnimationsForColumn/AnimateAllScatters if revived.
     internal void AnimateUSpinWin(System.Action onComplete = null)
     {
         if (currentDisplayMatrix == null)
@@ -1003,7 +943,7 @@ public class SlotView : MonoBehaviour
             {
                 if (currentDisplayMatrix[col][row] == 11) // USpin Symbol ID
                 {
-                    int displayIndex = ActiveRowStart + row;
+                    int displayIndex = row;
                     Image symbolImage = (col < reelImagesList.Count && reelImagesList[col].displayImages != null && displayIndex < reelImagesList[col].displayImages.Count)
                         ? reelImagesList[col].displayImages[displayIndex]
                         : null;
@@ -1069,7 +1009,7 @@ public class SlotView : MonoBehaviour
         var reel = reelImagesList[column];
         if (reel.displayImages == null) return;
 
-        int displayIndex = ActiveRowStart + row;
+        int displayIndex = row;
         if (displayIndex >= reel.displayImages.Count) return;
 
         Image symbolImage = reel.displayImages[displayIndex];
@@ -1078,7 +1018,7 @@ public class SlotView : MonoBehaviour
         ImageAnimation imageAnim = symbolImage.GetComponent<ImageAnimation>();
         if (imageAnim == null) return;
 
-        int symbolId = currentDisplayMatrix[column][ActiveRowStart + row];
+        int symbolId = currentDisplayMatrix[column][row];
         if (symbolId < 0 || symbolId >= animationSpriteArrays.Length) return;
 
         List<Sprite> animSprites = animationSpriteArrays[symbolId];
@@ -1099,8 +1039,9 @@ public class SlotView : MonoBehaviour
         });
 
         // loopCount <= 0 means run indefinitely — skip scheduling the stop entirely and let
-        // whatever kills winTweens end it. Must stay conditional: PlayStopAnimationsForColumn
-        // passes 1 for wild hits and relies on the timed stop.
+        // whatever kills winTweens end it. The only live caller (AnimateAllScatters, via the
+        // free-games trigger) passes 0, so the timed branch below is currently unexercised; it
+        // stays for the method's default of 1 and for any future caller that wants a bounded run.
         if (loopCount > 0)
         {
             seq.AppendInterval(winSymbolLoopDuration * loopCount);
@@ -1266,8 +1207,7 @@ public class SlotView : MonoBehaviour
 
             if (col < 0 || col >= ReelCount || row < 0 || row >= rowLimit) continue;
 
-            // Image lookup goes to the animation layer, which holds only the 3 active rows —
-            // so the local row index maps straight across with no ActiveRowStart offset.
+            // Image lookup goes to the animation layer, which holds one slot per visible cell.
             if (animSlotColumns == null || col >= animSlotColumns.Count) continue;
             var column = animSlotColumns[col];
             if (column == null || column.rows == null || row >= column.rows.Count) continue;
@@ -1277,9 +1217,7 @@ public class SlotView : MonoBehaviour
 
             Image slotImage = slot.image;
 
-            // Data lookup is a separate concern: currentDisplayMatrix is the full 5-row server
-            // matrix, so it still needs the offset into active-row space.
-            int matrixRow = ActiveRowStart + row;
+            int matrixRow = row;
             if (col >= currentDisplayMatrix.Count || matrixRow >= currentDisplayMatrix[col].Count) continue;
             int symbolId = currentDisplayMatrix[col][matrixRow];
 
@@ -1305,6 +1243,13 @@ public class SlotView : MonoBehaviour
             slotImage.gameObject.SetActive(true);
             anyShown = true;
 
+            // Take the reel icon underneath out of the picture entirely. It sits below the dim but
+            // is still faintly visible through it, and an oversized neighbour can poke into this
+            // cell — either way it reads as a ghost behind the bright copy. Hidden per-cell rather
+            // than blanket-hiding the display block, so the scatter (skipped above) correctly stays
+            // on screen and dimmed. HideWinSlots puts every icon back.
+            SetDisplayIconActive(col, row, false);
+
             // Animate on top of that only if this symbol actually has frames.
             if (symbolId < 0 || symbolId >= animationSpriteArrays.Length) continue;
             List<Sprite> animSprites = animationSpriteArrays[symbolId];
@@ -1315,6 +1260,9 @@ public class SlotView : MonoBehaviour
 
             imageAnim.textureArray = animSprites;
             imageAnim.doLoopAnimation = true;
+            // Must be set before StartAnimation() below — that is the only place ImageAnimation
+            // reads it, so a later change would not take effect until the next start.
+            imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(symbolId);
 
             activeAnims.Add(imageAnim);
 
@@ -1366,7 +1314,7 @@ public class SlotView : MonoBehaviour
     {
         if (phase1TotalWinText != null)
         {
-            phase1TotalWinText.text = SpriteTextFormatter.ToSpriteMoney(totalWinAmount);
+            phase1TotalWinText.text = totalWinAmount.ToString(SpriteTextFormatter.MoneyFormat);
             AnimateTextScaleAppear(phase1TotalWinText.transform);
         }
     }
@@ -1399,7 +1347,7 @@ public class SlotView : MonoBehaviour
         if (col >= reelImagesList.Count) return;
         var reel = reelImagesList[col];
         if (reel.displayImages == null) return;
-        int displayIndex = ActiveRowStart + row;
+        int displayIndex = row;
         if (displayIndex >= reel.displayImages.Count) return;
         if (reel.displayImages[displayIndex] == null) return;
 
@@ -1435,7 +1383,7 @@ public class SlotView : MonoBehaviour
             return;
         }
 
-        int displayIndex = ActiveRowStart + row;
+        int displayIndex = row;
         if (displayIndex >= reel.displayImages.Count)
         {
             Debug.LogError($"[AnimateWinSymbol] Display index {displayIndex} out of range for reel {column}");
@@ -1603,15 +1551,49 @@ public class SlotView : MonoBehaviour
         if (stopCoroutine) HideWinDim();
     }
 
+    // Shows or hides the reel icon sitting behind one win-layer slot. Row indices need no
+    // translation — displayImages holds one entry per visible row, in the same order as the
+    // server matrix and the animation layer.
+    private void SetDisplayIconActive(int col, int row, bool active)
+    {
+        if (reelImagesList == null || col < 0 || col >= reelImagesList.Count) return;
+
+        var reel = reelImagesList[col];
+        if (reel == null || reel.displayImages == null) return;
+        if (row < 0 || row >= reel.displayImages.Count) return;
+
+        Image icon = reel.displayImages[row];
+        if (icon != null) icon.gameObject.SetActive(active);
+    }
+
+    // Takes the whole win layer down and restores every reel icon underneath it. The restore is
+    // deliberately unconditional and paired with the hide in this one method: AnimateWinPositions
+    // hides icons per winning cell, and if any of them were missed here that cell would stay blank
+    // for the rest of the session. Every teardown path runs through here — between Phase 2 lines,
+    // at the end of the cycle, on the next StartSpin, and on Start.
     private void HideWinSlots()
     {
-        if (animSlotColumns == null) return;
-        foreach (var column in animSlotColumns)
+        if (animSlotColumns != null)
         {
-            if (column == null || column.rows == null) continue;
-            foreach (var slot in column.rows)
+            foreach (var column in animSlotColumns)
             {
-                if (slot != null && slot.image != null) slot.image.gameObject.SetActive(false);
+                if (column == null || column.rows == null) continue;
+                foreach (var slot in column.rows)
+                {
+                    if (slot != null && slot.image != null) slot.image.gameObject.SetActive(false);
+                }
+            }
+        }
+
+        if (reelImagesList == null) return;
+        for (int col = 0; col < reelImagesList.Count; col++)
+        {
+            var reel = reelImagesList[col];
+            if (reel == null || reel.displayImages == null) continue;
+
+            for (int row = 0; row < reel.displayImages.Count; row++)
+            {
+                if (reel.displayImages[row] != null) reel.displayImages[row].gameObject.SetActive(true);
             }
         }
     }
@@ -1738,7 +1720,7 @@ public class AnimSlot
 
 // One reel column's worth of win-animation slots. These live on a layer above the dim overlay,
 // so a winning symbol can be shown bright while the real reel icon stays dimmed underneath.
-// Only the 3 active/paying rows exist here — no decorative rows, so no ActiveRowStart offset.
+// One slot per visible cell — 3 rows, matching the grid exactly.
 [System.Serializable]
 public class AnimSlotColumn
 {
@@ -1748,11 +1730,11 @@ public class AnimSlotColumn
 [System.Serializable]
 public class ReelImages
 {
-    // Pure scroll buffer — everything except the 5 real display-block icons below.
+    // Pure scroll buffer — everything except the real display-block icons below.
     public List<Image> images = new List<Image>(16);
-    // Direct references to the 5 real display-block icons, in server-row order (index 0 =
-    // topmost decorative row .. index 4 = bottommost decorative row). Wired manually per reel
-    // in the Inspector — not derived from bufferRowsAbove, so each reel's buffer icon count can
+    // Direct references to the real display-block icons, top row first — one per visible row, so
+    // a row index here means the same thing it does in the server matrix. Wired manually per reel
+    // in the Inspector, not derived from bufferRowsAbove, so each reel's buffer icon count can
     // differ without breaking which icons show the real backend result.
-    public List<Image> displayImages = new List<Image>(5);
+    public List<Image> displayImages = new List<Image>(3);
 }

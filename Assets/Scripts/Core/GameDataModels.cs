@@ -217,11 +217,9 @@ public class SpinPayload
 public class GameConfig
 {
     public int reelCount = 5;
+    // Every row the server sends is live and pays. Sizzling 7s also sent decorative padding rows,
+    // which is why a separate totalResponseRowCount and an active-row offset used to exist.
     public int rowCount = 3;
-    // Golden Dynasty sends exactly the rows it plays, so this always equals rowCount and the
-    // active-row offset derived from it is always 0. Retained only so SlotView still compiles;
-    // it and the padding concept come out with the SlotView pass.
-    public int totalResponseRowCount = 3;
 
     // Number of paylines, and equally the per-line-bet multiplier: total bet = bet * activeLine.
     public int activeLine = 50;
@@ -236,10 +234,6 @@ public class GameConfig
     public int scatterSymbolId = -1;
     public int orbSymbolId = -1;
     public int mysterySymbolId = -1;
-
-    // No blank/filler symbol exists in this game. Retained at -1 (matches nothing) so SlotView's
-    // remaining blank guards stay inert until they are removed with the SlotView pass.
-    public int blankSymbolId = -1;
 }
 
 [Serializable]
@@ -443,7 +437,6 @@ public static class InitDataConverter
         {
             reelCount = reelCount,
             rowCount = 3,
-            totalResponseRowCount = 3,
             activeLine = totalLines,
             paylines = gameData?.lines,
             availableBets = gameData?.bets,
