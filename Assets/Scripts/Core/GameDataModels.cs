@@ -125,10 +125,17 @@ public class ServerSpinResponse
     public ServerPayload payload;
     public ServerResultFeatures features;
     public ServerPlayerBalance player;
-    // Deliberately unbound until their populated shape is known: "cellMetadata" (always {}),
-    // "payload.mysteryRevealSymbol" (always null), "payload.orbPrizeMap" (always {}),
-    // "features.holdAndSpin.heldPositions" (always []). Newtonsoft ignores undeclared fields, so
-    // omitting them costs nothing, whereas guessing a type wrong throws and loses the whole spin.
+
+    // Per-cell notes, keyed "row:col" in the same row-major space as matrix. Only Mystery uses it
+    // today: a cell that landed as a Mystery gets an entry, and matrix already holds the symbol it
+    // revealed into. Values are the string "mystery_" + symbol NAME ("mystery_J", "mystery_10",
+    // "mystery_Mystery") and are deliberately never parsed — see ConvertMysteryPositions.
+    public Dictionary<string, string> cellMetadata;
+
+    // Still deliberately unbound until their populated shape is known: "payload.orbPrizeMap"
+    // (always {}) and "features.holdAndSpin.heldPositions" (always []). Newtonsoft ignores
+    // undeclared fields, so omitting them costs nothing, whereas guessing a type wrong throws and
+    // loses the whole spin.
 }
 
 [Serializable]
@@ -142,11 +149,15 @@ public class ServerPlayerBalance
 [Serializable]
 public class ServerPayload
 {
-    // The spin's line-win total — verified as exactly the sum of lineWins[].win.
+    // The spin's total win, and the only figure to display. The server sends the grand total here
+    // and the breakdown separately, so the client never sums anything itself. On a spin with no
+    // scatter pay it happens to equal the sum of lineWins[].win, which is all the samples so far
+    // have shown — but it is the total, not the line subtotal.
     public double currentWinning;
+    // Per-line breakdown, used only for the amount label on each line during the Phase 2 cycle.
     public List<ServerLineWin> lineWins;
-    // Paid on total bet, and NOT included in currentWinning. Always 0 in every sample seen so far,
-    // so the additive assumption is unverified — revisit when a scatter actually pays.
+    // The scatter pay, on total bet rather than per line. Informational: it is already part of
+    // currentWinning. Never add it — that would double-count the scatter on every spin one pays.
     public double scatterWin;
     public int scatterCount;
 }
@@ -280,18 +291,13 @@ public class SpinResult
     public List<WinLine> winLines;
     public PlayerData playerData;
 
-    // Feature state is parsed off the wire but deliberately not mapped through yet, so every
-    // feature stays gated off while the base game is brought up. These stay null/default until
-    // Free Games and Hold & Spin are designed.
-    public FreeSpinData freeSpinData;
-    public ScatterData scatterData;
-    public OverlayScatterData overlayScatterData;
-    public Dictionary<string, int> stickyWilds;
+    // Always present — the server sends the free-game block on every spin, in or out of a round.
+    public FreeGameData freeGame;
 
-    public int serverSpinsRemaining;
-    public bool isRoundOver;
-    public double? freeSpinsMultiplier;
-    public double? serverFreeSpinTotalWin;
+    // Cells that landed as a Mystery symbol, as flat indices (row * reelCount + col) — the same
+    // space WinLine.positions uses. resultMatrix already holds what each one revealed into, so
+    // these are positions only: draw a Mystery there, play the reveal, uncover what is beneath.
+    public List<int> mysteryPositions;
 
     // Dormant CNY-era holdovers — never populated. Queued for removal in TODO.md "Cleanup".
     public USpinResultData uSpinData;
@@ -325,31 +331,30 @@ public class WinLine
     public double winAmount;
 }
 
+/// <summary>
+/// The free-games facts for one spin, straight from features.freeGame. Everything here is
+/// server-authoritative per spin; the round-level running totals GameManager needs (spins used,
+/// total awarded) are derived from these rather than sent.
+/// </summary>
 [Serializable]
-public class FreeSpinData
+public class FreeGameData
 {
-    public bool isTriggered;
-    public int spinsAwarded;
-    public int remainingSpins;
-    public bool isBought;
-    public string boxId;
-}
+    // True when this spin was itself played on free-game credit. False on the spin that triggers
+    // a round — that one is a paid base spin and pays out normally.
+    public bool isFreeGame;
 
-[Serializable]
-public class ScatterData
-{
-    public bool isTriggered;
-    public int scatterCount;
-    public double winAmount;
-}
+    // Spins left AFTER this one. Already decremented by the server, and retriggers are folded in,
+    // so it can go up as well as down (6 -> 11 -> 10 -> 15 in a captured round).
+    public int spinsRemaining;
 
-[Serializable]
-public class OverlayScatterData
-{
-    public bool isTriggered;
-    public int count;
-    public int extraSpins;
-    public List<List<int>> positions;
+    // Set on any spin that awards spins — both the initial trigger and every retrigger. Paired
+    // with isFreeGame it distinguishes the two: trigger is (awarded && !isFreeGame), retrigger is
+    // (awarded && isFreeGame).
+    public bool spinsAwarded;
+
+    // The round's running total, server-authoritative. The old backend sent no aggregate and the
+    // client had to accumulate, which drifted whenever a response was missed.
+    public double roundWin;
 }
 
 [Serializable]
@@ -526,9 +531,9 @@ public static class InitDataConverter
     {
         var payload = serverResponse?.payload;
 
-        // Verified against a live spin: balance moved by (win - totalBet) exactly, and
-        // currentWinning equalled the sum of lineWins. scatterWin is NOT part of it and will have
-        // to be added here once its behaviour is confirmed.
+        // currentWinning is the server's grand total for the spin and passes straight through —
+        // scatterWin and any other component is already inside it, so nothing is summed here.
+        // Verified against a live spin: balance moved by exactly (win - totalBet).
         double winAmountVal = payload?.currentWinning ?? 0;
         double newBalance = serverResponse?.player?.balance ?? CalculateNewBalance(currentBalance, winAmountVal);
 
@@ -545,22 +550,78 @@ public static class InitDataConverter
                 currentBetIndex = 0
             },
 
-            // Features stay gated off for base-game bring-up. GameManager keys its free-spin entry
-            // off freeSpinData being non-null, so leaving these null is what holds the old
-            // Sizzling-era pick-a-box flow shut.
-            freeSpinData = null,
-            scatterData = null,
-            overlayScatterData = null,
-            stickyWilds = null,
-
-            serverSpinsRemaining = 0,
-            isRoundOver = false,
-            freeSpinsMultiplier = null,
-            serverFreeSpinTotalWin = null,
+            freeGame = ConvertFreeGame(serverResponse?.features?.freeGame),
+            mysteryPositions = ConvertMysteryPositions(serverResponse?.cellMetadata, gameConfig),
 
             uSpinData = null,
             moneyBagData = null
         };
+    }
+
+    // Never returns null, so the controller can read it without guarding every access. A missing
+    // block is indistinguishable from "not in a round", which is the correct reading either way.
+    private static FreeGameData ConvertFreeGame(ServerFreeGameResult serverFreeGame)
+    {
+        if (serverFreeGame == null) return new FreeGameData();
+
+        return new FreeGameData
+        {
+            isFreeGame = serverFreeGame.isFreeGame,
+            spinsRemaining = serverFreeGame.freeGameCount,
+            spinsAwarded = serverFreeGame.freeGameAdded,
+            roundWin = serverFreeGame.totalRoundWin
+        };
+    }
+
+    /// <summary>
+    /// Turns cellMetadata into the flat cell indices that landed as a Mystery.
+    ///
+    /// Only the KEYS are read. The values encode the revealed symbol as "mystery_" + its display
+    /// name ("mystery_J", "mystery_10", "mystery_Mystery"), which would mean splitting on an
+    /// underscore and matching a name — brittle, and pointless: matrix already carries the revealed
+    /// symbol at that same cell. So the view draws a Mystery over a cell that is already correct
+    /// underneath, and uncovering it is the reveal.
+    ///
+    /// Keys are "row:col" in the server's row-major space, confirmed against live data — a key of
+    /// "1:4" only lands in range read that way on a 3-row matrix.
+    /// </summary>
+    private static List<int> ConvertMysteryPositions(Dictionary<string, string> cellMetadata, GameConfig gameConfig)
+    {
+        var positions = new List<int>();
+        if (cellMetadata == null || cellMetadata.Count == 0) return positions;
+
+        int reelCount = gameConfig != null ? gameConfig.reelCount : 5;
+        int rowCount = gameConfig != null ? gameConfig.rowCount : 3;
+
+        foreach (var entry in cellMetadata)
+        {
+            string key = entry.Key;
+            if (string.IsNullOrEmpty(key)) continue;
+
+            int separator = key.IndexOf(':');
+            if (separator <= 0 || separator >= key.Length - 1)
+            {
+                UnityEngine.Debug.LogError($"[InitDataConverter] cellMetadata key '{key}' is not in the expected row:col form — cell skipped.");
+                continue;
+            }
+
+            if (!int.TryParse(key.Substring(0, separator), out int row)
+                || !int.TryParse(key.Substring(separator + 1), out int col))
+            {
+                UnityEngine.Debug.LogError($"[InitDataConverter] Could not read row/col out of cellMetadata key '{key}' — cell skipped.");
+                continue;
+            }
+
+            if (row < 0 || row >= rowCount || col < 0 || col >= reelCount)
+            {
+                UnityEngine.Debug.LogError($"[InitDataConverter] cellMetadata key '{key}' is outside the {rowCount}x{reelCount} grid — cell skipped.");
+                continue;
+            }
+
+            positions.Add(row * reelCount + col);
+        }
+
+        return positions;
     }
 
     // Server matrix is row-major (matrix[row][col]); the client works column-major ([reel][row]),

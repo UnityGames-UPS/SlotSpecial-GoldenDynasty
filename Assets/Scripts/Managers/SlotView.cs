@@ -62,10 +62,10 @@ public class SlotView : MonoBehaviour
         { 1,  20f },  // Scatter
         { 2,  20f },  // Orb
         { 3,  20f },  // Mystery
-        { 4,  20f },  // Warriors
+        { 4,  25f },  // Warriors
         { 5,  25f },  // Lady
         { 6,  20f },  // Book
-        { 7,  40f },  // Drum
+        { 7,  50f },  // Drum
         { 8,  15f },  // A
         { 9,  15f },  // K
         { 10, 15f },  // Q
@@ -149,10 +149,10 @@ public class SlotView : MonoBehaviour
     [SerializeField] private float quickStopOvershoot = 20f;
     [SerializeField] private float quickStopDuration = 0.2f;
 
-    [Header("Bonus Anticipation")]
-    [Tooltip("Effects shown around a reel that could still complete a bonus trigger. Index 0 = reel 2, index 1 = reel 3. Reel 1 can never anticipate, since two bonuses must already have landed.")]
-    [SerializeField] private GameObject[] anticipationEffects = new GameObject[2];
-    [Tooltip("Extra time the anticipating reel (and every reel after it) keeps spinning.")]
+    [Header("Scatter Anticipation")]
+    [Tooltip("Effects shown around a reel that could still complete a scatter trigger. Index 0 = reel 2, index 1 = reel 3, index 2 = reel 4, index 3 = reel 5. Reel 1 can never anticipate, since two scatters must already have landed.")]
+    [SerializeField] private GameObject[] anticipationEffects = new GameObject[4];
+    [Tooltip("Extra time each held reel keeps spinning. Applied per held reel and cumulative, so several holds in one spin add up.")]
     [SerializeField] private float anticipationExtraTime = 2f;
     [Tooltip("Shorter hold used when the player is on Turbo.")]
     [SerializeField] private float anticipationExtraTimeTurbo = 1f;
@@ -180,6 +180,12 @@ public class SlotView : MonoBehaviour
     [Tooltip("The 27 paylines, indexed directly by the server's lineIndex — element 0 is line 0. Shown one at a time during the Phase 2 cycle. Leave a field empty if its art doesn't exist yet; it's skipped with a warning naming the index.")]
     [SerializeField] private WinLineVisual[] winLineVisuals = new WinLineVisual[27];
 
+    [Header("Mystery Reveal Layer")]
+    [Tooltip("Root of the layer holding the Mystery symbols during their reveal. Sits ABOVE the win animation layer.")]
+    [SerializeField] private GameObject mysteryLayerRoot;
+    [Tooltip("One entry per reel column, each holding the 3 row slots top to bottom. Same shape as the win layer — 5 columns of 3.")]
+    [SerializeField] private List<AnimSlotColumn> mysterySlotColumns = new List<AnimSlotColumn>(5);
+
     [Header("Phase 1 Total Win Presentation")]
     [SerializeField] private TMPro.TMP_Text phase1TotalWinText;
 
@@ -199,9 +205,14 @@ public class SlotView : MonoBehaviour
     // when the round is actually over.
     private List<WinLine> lastWinLines;
 
-    // Which reel is being held back to tease a bonus this spin, or -1. Set before the reels start
-    // stopping; StopSingleReel raises and clears the effect off its own landing events.
-    private int anticipationReelIndex = -1;
+    // Which reels are being held back to tease a scatter trigger this spin. Filled before the reels
+    // start stopping; StopSingleReel raises and clears each effect off its own landing events.
+    // More than one reel can be held in a single spin — see ComputeAnticipatedReels.
+    private readonly HashSet<int> anticipatedReels = new HashSet<int>();
+
+    // True while the win dim is being held up by the Mystery reveal, so the win presentation that
+    // follows inherits it instead of dropping and re-raising it (which would flicker).
+    private bool dimHeld;
 
 
     internal List<List<int>> currentDisplayMatrix;
@@ -244,14 +255,18 @@ public class SlotView : MonoBehaviour
         HidePhase1TotalWinText();
         HideAnticipationEffects();
         HideWinSlots();
+        HideMysterySlots();
         HideAllWinLines();
+        // Release rather than Hide: this is the full teardown, so a Mystery reveal's claim on the
+        // dim must not survive it.
+        ReleaseHeldDim();
         HideWinDim();
         if (symbolInfoCard) symbolInfoCard.HideCard();
     }
 
     private void HideAnticipationEffects()
     {
-        anticipationReelIndex = -1;
+        anticipatedReels.Clear();
         if (anticipationEffects == null) return;
         foreach (var effect in anticipationEffects)
         {
@@ -660,19 +675,21 @@ public class SlotView : MonoBehaviour
         float stagger = isQuickStop ? quickStopStagger : reelStopStagger;
 
         // Skipped entirely on a quick stop — that path covers both QuickSpin mode and the player
-        // hitting Stop, and neither should sit through the hold. StopSingleReel reads this field
-        // to know when to raise and clear the effect.
-        anticipationReelIndex = isQuickStop ? -1 : ComputeAnticipationReel(resultMatrix);
-        int anticipationReel = anticipationReelIndex;
+        // hitting Stop, and neither should sit through the hold. StopSingleReel reads this set to
+        // know when to raise and clear each effect.
+        anticipatedReels.Clear();
+        if (!isQuickStop) ComputeAnticipatedReels(resultMatrix, anticipatedReels);
         float anticipationHold = GetAnticipationHold();
 
+        // Each held reel spins on for anticipationHold, which pushes itself and everything after
+        // it back by that much — so the delays are cumulative and the reels still land left to
+        // right. Four held reels really do add four holds; that is the intended drama.
+        int holdsSoFar = 0;
         for (int col = 0; col < ReelCount; col++)
         {
-            // The anticipating reel and every reel after it shift back by the same amount, so the
-            // reels still land left to right.
-            float delay = col * stagger;
-            if (anticipationReel >= 0 && col >= anticipationReel) delay += anticipationHold;
+            if (anticipatedReels.Contains(col)) holdsSoFar++;
 
+            float delay = col * stagger + anticipationHold * holdsSoFar;
             StartCoroutine(StopSingleReel(col, resultMatrix[col], delay, isQuickStop));
         }
 
@@ -687,9 +704,9 @@ public class SlotView : MonoBehaviour
             longestStopTime = lastColumnDelay + stopDuration;
         }
 
-        // The whole hand-off waits too, so the win presentation can't start while a reel is
-        // still held.
-        if (anticipationReel >= 0) longestStopTime += anticipationHold;
+        // The whole hand-off waits for every hold too, so the win presentation can't start while a
+        // reel is still spinning on.
+        longestStopTime += anticipationHold * anticipatedReels.Count;
 
         yield return new WaitForSeconds(longestStopTime);
 
@@ -704,35 +721,41 @@ public class SlotView : MonoBehaviour
         onComplete?.Invoke();
     }
 
-    // Which reel (if any) should be held back to tease a possible bonus trigger, or -1 for none.
-    // Two bonuses must already be showing on reels that land earlier, and only one reel per spin
-    // ever anticipates. Reel 0 can never qualify — nothing has landed before it.
-    private int ComputeAnticipationReel(List<List<int>> resultMatrix)
+    /// <summary>
+    /// Which reels are held back to tease a scatter trigger. Any number of reels can be held in one
+    /// spin, and the hold starts as soon as a 2nd scatter is on the board — whether or not a 3rd
+    /// ever turns up.
+    ///
+    /// The whole rule reduces to one condition: <b>a reel is held iff exactly 2 scatters have
+    /// landed in the reels before it.</b> Once a 3rd lands the running count passes 2 and the holds
+    /// stop by themselves; while only 1 has landed it never starts. That single test also produces
+    /// every "no anticipation" case without special-casing any of them:
+    /// <list type="bullet">
+    /// <item>3 scatters on reel 1 — the count is already 3 by reel 2, so nothing is held.</item>
+    /// <item>2nd scatter on the last reel — no reels follow it to hold.</item>
+    /// <item>All 3 on the last reel — the count is 0 everywhere before it.</item>
+    /// </list>
+    /// One known gap, deliberately left (see TODO.md): a single early scatter followed by two on
+    /// the last reel gives no build-up, because the count before that reel is only 1.
+    /// </summary>
+    private void ComputeAnticipatedReels(List<List<int>> resultMatrix, HashSet<int> results)
     {
-        if (resultMatrix == null || ReelCount < 2) return -1;
+        if (resultMatrix == null || ReelCount < 2) return;
 
-        int reel0 = CountBonusInColumn(resultMatrix, 0);
-
-        // Both bonuses on the first reel. Normally reel 1 takes the tease, but if reel 1 has no
-        // bonus at all the tease moves to reel 2 so it lands on a reel that can still deliver.
-        if (reel0 >= 2)
+        int scattersBefore = 0;
+        for (int col = 0; col < ReelCount; col++)
         {
-            if (ReelCount > 1 && CountBonusInColumn(resultMatrix, 1) >= 1) return 1;
-            return ReelCount > 2 ? 2 : -1;
+            if (scattersBefore == 2) results.Add(col);
+            scattersBefore += CountScattersInColumn(resultMatrix, col);
         }
-
-        // One on each of the first two reels — the usual case, tease the last reel.
-        if (ReelCount > 2 && reel0 + CountBonusInColumn(resultMatrix, 1) >= 2) return 2;
-
-        return -1;
     }
 
     // Counts scatters in one reel column, bounded to the rows the grid actually shows.
-    private int CountBonusInColumn(List<List<int>> matrix, int col)
+    private int CountScattersInColumn(List<List<int>> matrix, int col)
     {
         if (matrix == null || col < 0 || col >= matrix.Count || matrix[col] == null) return 0;
 
-        int bonusId = gameManager?.gameConfig != null ? gameManager.gameConfig.scatterSymbolId : 0;
+        int bonusId = gameManager?.gameConfig != null ? gameManager.gameConfig.scatterSymbolId : -1;
         if (bonusId < 0) return 0;
 
         int rowEnd = Mathf.Min(RowCount, matrix[col].Count);
@@ -751,7 +774,8 @@ public class SlotView : MonoBehaviour
         return isTurbo ? anticipationExtraTimeTurbo : anticipationExtraTime;
     }
 
-    // effects[0] belongs to reel index 1, effects[1] to reel index 2 — reel 0 can never anticipate.
+    // effects[0] belongs to reel index 1, effects[1] to reel index 2, and so on — reel 0 can never
+    // anticipate, since two scatters have to have landed before it.
     private void SetAnticipationEffect(int reelIndex, bool visible)
     {
         int effectIndex = reelIndex - 1;
@@ -812,12 +836,13 @@ public class SlotView : MonoBehaviour
         }
         // ──────────────────────────────────────────────────────────────────
 
-        // The reel immediately before the anticipating one is starting its landing right now —
-        // that's the slam the effect should come in on. Driven off the actual event rather than a
-        // computed timestamp so it can't drift out of sync with the staggers or the hold.
-        if (anticipationReelIndex >= 0 && columnIndex == anticipationReelIndex - 1)
+        // If the next reel is being held, its effect comes in on this reel's landing slam. Driven
+        // off the actual event rather than a computed timestamp so it can't drift out of sync with
+        // the staggers or the holds — which matters more now that several reels can be held and
+        // the delays accumulate.
+        if (anticipatedReels.Contains(columnIndex + 1))
         {
-            SetAnticipationEffect(anticipationReelIndex, true);
+            SetAnticipationEffect(columnIndex + 1, true);
         }
 
         if (isQuickStop)
@@ -844,12 +869,11 @@ public class SlotView : MonoBehaviour
                 .SetEase(stopEase, stopEaseOvershoot)
                 .OnComplete(() =>
                 {
-                    // This reel was the one being teased and has now landed — clear the effect
-                    // whether or not the bonus actually turned up.
-                    if (columnIndex == anticipationReelIndex)
+                    // This reel was being teased and has now landed — clear its effect whether or
+                    // not the scatter actually turned up. Other reels keep their own holds.
+                    if (anticipatedReels.Remove(columnIndex))
                     {
-                        SetAnticipationEffect(anticipationReelIndex, false);
-                        anticipationReelIndex = -1;
+                        SetAnticipationEffect(columnIndex, false);
                     }
                 });
 
@@ -1056,6 +1080,164 @@ public class SlotView : MonoBehaviour
 
     #endregion
 
+    #region Mystery Reveal
+
+    /// <summary>
+    /// Plays the Mystery door-opening reveal, then hands back to the caller.
+    ///
+    /// The reveal is subtractive rather than additive: the reel icon underneath ALREADY holds the
+    /// symbol the Mystery turned into, because the server's matrix is post-reveal. So this draws a
+    /// Mystery on the layer above, plays its clip, and then hides that layer — uncovering the real
+    /// symbol. No crossfade, and no need to resolve the revealed symbol's name to an id.
+    ///
+    /// Raises the win dim and holds it up, so the win presentation that follows inherits it rather
+    /// than dropping and re-raising it.
+    /// </summary>
+    /// <param name="positions">Flat cell indices (row * reelCount + col) that landed as Mystery.</param>
+    internal void PlayMysteryReveal(List<int> positions, System.Action onComplete)
+    {
+        if (positions == null || positions.Count == 0)
+        {
+            onComplete?.Invoke();
+            return;
+        }
+
+        StartCoroutine(MysteryRevealRoutine(positions, onComplete));
+    }
+
+    private IEnumerator MysteryRevealRoutine(List<int> positions, System.Action onComplete)
+    {
+        int mysteryId = (gameManager != null && gameManager.gameConfig != null)
+            ? gameManager.gameConfig.mysterySymbolId
+            : -1;
+
+        List<Sprite> revealFrames = (mysteryId >= 0 && mysteryId < animationSpriteArrays.Length)
+            ? animationSpriteArrays[mysteryId]
+            : null;
+
+        var activeAnims = new List<ImageAnimation>();
+        int completedCount = 0;
+        bool isCompleted = false;
+        bool anyShown = false;
+
+        int rowCount = RowCount;
+
+        foreach (int flatIndex in positions)
+        {
+            int row = flatIndex / ReelCount;
+            int col = flatIndex % ReelCount;
+
+            if (col < 0 || col >= ReelCount || row < 0 || row >= rowCount) continue;
+            if (mysterySlotColumns == null || col >= mysterySlotColumns.Count) continue;
+
+            var column = mysterySlotColumns[col];
+            if (column == null || column.rows == null || row >= column.rows.Count) continue;
+
+            AnimSlot slot = column.rows[row];
+            if (slot == null || slot.image == null) continue;
+
+            // Show the Mystery symbol unconditionally, even with no frames to play — otherwise a
+            // missing clip would leave the cell already revealed with no reveal beat at all.
+            Image slotImage = slot.image;
+            slotImage.DOKill();
+            ApplySymbol(slotImage, mysteryId);
+            slotImage.transform.localScale = Vector3.one;
+            Color c = slotImage.color;
+            slotImage.color = new Color(c.r, c.g, c.b, 1f);
+            slotImage.gameObject.SetActive(true);
+            anyShown = true;
+
+            if (revealFrames == null || revealFrames.Count == 0) continue;
+
+            ImageAnimation imageAnim = slot.animation;
+            if (imageAnim == null) continue;
+
+            imageAnim.textureArray = revealFrames;
+            imageAnim.doLoopAnimation = true;
+            imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(mysteryId);
+
+            activeAnims.Add(imageAnim);
+
+            imageAnim.onLoopComplete = (currentLoop) =>
+            {
+                // One pass only — a door opens once, it doesn't loop.
+                if (currentLoop >= 1)
+                {
+                    imageAnim.onLoopComplete = null;
+                    imageAnim.StopAnimation();
+
+                    completedCount++;
+                    if (completedCount >= activeAnims.Count)
+                    {
+                        isCompleted = true;
+                    }
+                }
+            };
+        }
+
+        if (!anyShown)
+        {
+            onComplete?.Invoke();
+            yield break;
+        }
+
+        if (winDimOverlay != null) winDimOverlay.SetActive(true);
+        if (mysteryLayerRoot != null) mysteryLayerRoot.SetActive(true);
+        // Held so the win presentation's teardown can't drop the dim between the two beats.
+        dimHeld = true;
+
+        foreach (var imageAnim in activeAnims)
+        {
+            imageAnim.StartAnimation();
+        }
+
+        if (activeAnims.Count > 0)
+        {
+            yield return new WaitUntil(() => isCompleted);
+        }
+        else
+        {
+            yield return new WaitForSeconds(winSymbolLoopDuration);
+        }
+
+        // Uncovering the layer IS the reveal — the reel icons beneath are already correct.
+        HideMysterySlots();
+
+        onComplete?.Invoke();
+    }
+
+    private void HideMysterySlots()
+    {
+        if (mysterySlotColumns != null)
+        {
+            foreach (var column in mysterySlotColumns)
+            {
+                if (column == null || column.rows == null) continue;
+                foreach (var slot in column.rows)
+                {
+                    if (slot == null) continue;
+
+                    if (slot.animation != null)
+                    {
+                        slot.animation.onLoopComplete = null;
+                        slot.animation.StopAnimation();
+                    }
+
+                    if (slot.image != null)
+                    {
+                        slot.image.DOKill();
+                        slot.image.transform.localScale = Vector3.one;
+                        slot.image.gameObject.SetActive(false);
+                    }
+                }
+            }
+        }
+
+        if (mysteryLayerRoot != null) mysteryLayerRoot.SetActive(false);
+    }
+
+    #endregion
+
     #region Win Line Animation
 
     internal void ShowWinLineAnimation(List<WinLine> winLines, System.Action onComplete)
@@ -1063,6 +1245,9 @@ public class SlotView : MonoBehaviour
         if (winLines == null || winLines.Count == 0)
         {
             lastWinLines = null;
+            // No win presentation is coming to inherit the dim, so a Mystery reveal that just
+            // raised it has to let it go here — otherwise the board stays dark until the next spin.
+            ReleaseHeldDim();
             onComplete?.Invoke();
             return;
         }
@@ -1137,11 +1322,15 @@ public class SlotView : MonoBehaviour
         // Invoke onComplete immediately after Phase 1 so game logic (Free Spins / Autoplay / Win complete) can proceed
         onComplete?.Invoke();
 
-        // Skip Phase 2 if in Free Spins, Autoplay, or if a Special Feature (USpin, MoneyBag, Scatter trigger) was triggered
+        // Skip Phase 2 if in Free Spins, Autoplay, or if a feature was triggered — the trigger
+        // presentation takes the screen instead, and AnimateAllScatters does its own teardown.
+        // A retrigger (spinsAwarded during a free spin) is deliberately not counted: the round is
+        // already running and has no separate trigger sequence to make way for.
         bool hasSpecialFeature = (gameManager != null && gameManager.lastResult != null && (
             (gameManager.lastResult.uSpinData != null && gameManager.lastResult.uSpinData.triggered) ||
             (gameManager.lastResult.moneyBagData != null && gameManager.lastResult.moneyBagData.triggered) ||
-            (gameManager.lastResult.freeSpinData != null && gameManager.lastResult.freeSpinData.isTriggered)
+            (gameManager.lastResult.freeGame != null && gameManager.lastResult.freeGame.spinsAwarded
+                && !gameManager.lastResult.freeGame.isFreeGame)
         ));
 
         bool skipPhase2 = (gameManager != null && (gameManager.isInFreeSpins || gameManager.isAutoPlaying)) || hasSpecialFeature;
@@ -1154,7 +1343,13 @@ public class SlotView : MonoBehaviour
             // round is genuinely over; a special-feature spin is left alone, since AnimateAllScatters
             // does its own KillWinTweens.
             winAnimationCoroutine = null;
-            if (!hasSpecialFeature) KillWinTweens();
+            if (!hasSpecialFeature)
+            {
+                // Presentation is genuinely over here, so any dim the Mystery reveal was holding
+                // is released before the teardown rather than surviving it.
+                ReleaseHeldDim();
+                KillWinTweens();
+            }
             yield break;
         }
 
@@ -1653,10 +1848,24 @@ public class SlotView : MonoBehaviour
         }
     }
 
+    // The win layer always comes down, but the dim itself is skipped while the Mystery reveal is
+    // holding it up: the reveal raises it and the win presentation that follows is meant to inherit
+    // it. Without this, ShowWinLineAnimation's opening KillWinTweens would drop the dim a frame
+    // before Phase 1 raised it again, which reads as a flicker.
     private void HideWinDim()
     {
-        if (winDimOverlay != null) winDimOverlay.SetActive(false);
         if (winAnimationLayer != null) winAnimationLayer.SetActive(false);
+
+        if (dimHeld) return;
+        if (winDimOverlay != null) winDimOverlay.SetActive(false);
+    }
+
+    // Releases the reveal's claim on the dim and takes it down. Called at the end of the whole
+    // presentation, so a Mystery spin that produced no win still clears correctly.
+    private void ReleaseHeldDim()
+    {
+        dimHeld = false;
+        if (winDimOverlay != null) winDimOverlay.SetActive(false);
     }
 
     #endregion

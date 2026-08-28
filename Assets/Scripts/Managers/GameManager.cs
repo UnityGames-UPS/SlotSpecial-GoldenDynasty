@@ -16,6 +16,12 @@ public class GameManager : MonoBehaviour
     [SerializeField] private float turboSpinDuration = 2.0f;
     [SerializeField] private float quickSpinCycleDuration = 0.1f;
 
+    [Header("Free Games Timing")]
+    [Tooltip("How long the scatters animate before the award prompt or, on a retrigger, before the counter climbs.")]
+    [SerializeField] private float scatterTriggerHold = 3.5f;
+    [Tooltip("Scatter animation loops on a retrigger. The initial trigger uses 0 (runs until the first free spin starts) because the player controls when that ends.")]
+    [SerializeField] private int scatterTriggerLoops = 2;
+
     [Header("Win Settings")]
     [SerializeField] private double bigWinMultiplierThreshold = 500.0;
     public double BigWinMultiplierThreshold => bigWinMultiplierThreshold;
@@ -38,16 +44,18 @@ public class GameManager : MonoBehaviour
     internal int savedAutoPlayTotalRounds;
 
     internal bool isInFreeSpins;
-    internal int freeSpinsRemaining;
-    internal int freeSpinsUsed;
-    internal bool waitingForFreeSpinStart;
+    internal int freeSpinsRemaining;      // server-authoritative, already decremented for this spin
+    internal int freeSpinsUsed;           // counted here — one per free spin actually played
+    internal double freeSpinsRoundWin;    // server-authoritative, from features.freeGame.totalRoundWin
 
-    // Round-level free-games state. The server sends only per-spin facts (remaining count, this
-    // spin's win), so the running totals are accumulated here rather than read off a response.
-    internal int freeSpinsTotalAwarded;   // grows when a retrigger awards more spins mid-round
-    internal double freeSpinsRoundWin;    // the round's total win, from features.freeSpinTotalWin
-    internal string currentBoxId;         // presentation only
-    internal double? currentMultiplier;   // last value the server sent; kept when a spin omits it
+    // Total spins the round has awarded, including every retrigger. Derived rather than tracked:
+    // the server never sends an award size, but used + remaining is always the total, and it
+    // self-corrects if a response is ever missed.
+    internal int FreeSpinsTotalAwarded => freeSpinsUsed + freeSpinsRemaining;
+
+    // The total the counter was showing before a retrigger landed, so its count-up has somewhere to
+    // start from. -1 when no retrigger is pending presentation.
+    private int retriggerTotalBefore = -1;
 
     internal bool isInitialized;
     internal bool initializationFailed;
@@ -62,7 +70,6 @@ public class GameManager : MonoBehaviour
     {
         currentState = GameState.Initializing;
         currentSpinSpeed = SpinSpeed.Normal;
-        waitingForFreeSpinStart = false;
         isInitialized = false;
         initializationFailed = false;
     }
@@ -156,8 +163,6 @@ public class GameManager : MonoBehaviour
     
     internal void RequestSpin()
     {
-        if (waitingForFreeSpinStart) return;
-
         if (currentState != GameState.Idle) return;
         if (!socketManager.isConnected) return;
 
@@ -289,6 +294,22 @@ public class GameManager : MonoBehaviour
             };
         }
 
+        // Mystery symbols open before anything else is presented. The reveal has to finish for
+        // every cell before the win animations start, so the rest of this runs from its callback.
+        // Spins with no Mystery fall straight through.
+        if (slotView != null && lastResult != null && lastResult.mysteryPositions != null && lastResult.mysteryPositions.Count > 0)
+        {
+            slotView.PlayMysteryReveal(lastResult.mysteryPositions, PresentSpinOutcome);
+        }
+        else
+        {
+            PresentSpinOutcome();
+        }
+    }
+
+    // Everything that happens once the board is final — after the Mystery reveal, if there was one.
+    private void PresentSpinOutcome()
+    {
         if (lastResult != null && lastResult.winAmount > 0 && lastResult.winLines != null && lastResult.winLines.Count > 0)
         {
             double totalPay = GetTotalPay();
@@ -371,13 +392,41 @@ public class GameManager : MonoBehaviour
             yield return null;
         }
 
-        if (lastResult != null && lastResult.freeSpinData != null && lastResult.freeSpinData.isTriggered && !isInFreeSpins)
+        // The initial trigger — a paid base spin that awarded spins. Its scatter sequence runs
+        // before the round is entered.
+        if (lastResult != null && lastResult.freeGame != null
+            && lastResult.freeGame.spinsAwarded && !lastResult.freeGame.isFreeGame)
         {
             yield return StartCoroutine(DelayScatterTriggerResult());
             yield break;
         }
 
+        // A retrigger — same scatter sequence, then the counter's total climbs to its new figure.
+        // No prompt and no Start button; the round simply carries on.
+        if (isInFreeSpins && retriggerTotalBefore >= 0)
+        {
+            yield return StartCoroutine(PlayRetriggerSequence());
+        }
+
         ResumeAfterSpecialFeature();
+    }
+
+    private IEnumerator PlayRetriggerSequence()
+    {
+        int fromTotal = retriggerTotalBefore;
+        retriggerTotalBefore = -1;
+
+
+        AudioManager.Instance?.Play3UspinWinLineLoop();
+        if (slotView != null) slotView.AnimateAllScatters(scatterTriggerLoops);
+
+        yield return new WaitForSeconds(scatterTriggerHold);
+
+        if (freeGameView == null) yield break;
+
+        bool countUpDone = false;
+        freeGameView.AnimateTotalTo(freeSpinsRemaining, fromTotal, FreeSpinsTotalAwarded, () => countUpDone = true);
+        yield return new WaitUntil(() => countUpDone);
     }
 
     private void ResumeAfterSpecialFeature()
@@ -397,12 +446,13 @@ public class GameManager : MonoBehaviour
         // Play special feature trigger sound AFTER all reels have stopped
         AudioManager.Instance?.Play3UspinWinLineLoop();
 
-        // Animate the bonus symbols indefinitely (0 = no self-stop) so they keep playing behind
-        // the whole free-games intro sequence. The first free spin's StartSpin stops them.
+        // Animate the scatters indefinitely (0 = no self-stop) so they keep playing behind the
+        // award prompt while the player decides to press Start. The first free spin's StartSpin
+        // stops them.
         slotView.AnimateAllScatters(0);
 
         // Wait for scatter hit animations to play
-        yield return new WaitForSeconds(3.5f);
+        yield return new WaitForSeconds(scatterTriggerHold);
         ProcessSpinResult();
     }
 
@@ -443,42 +493,26 @@ public class GameManager : MonoBehaviour
         // through the reel. Removed rather than retuned.
 
         // Update the round's numbers as soon as the response lands so the displays never lag the
-        // reels. Everything here is per-spin fact from the server plus our own running totals.
-        if (isInFreeSpins)
+        // reels. A retrigger needs no special handling: the server has already folded the extra
+        // spins into spinsRemaining, so the count simply goes up instead of down.
+        if (isInFreeSpins && result.freeGame != null)
         {
-            freeSpinsRemaining = result.serverSpinsRemaining;
+            int totalBefore = FreeSpinsTotalAwarded;
 
-            // Server-authoritative since the backend started sending features.freeSpinTotalWin.
-            // This used to be `+= result.winAmount`, which drifted permanently if a response was
-            // missed or the socket reconnected mid-round. An absent value leaves the previous
-            // figure alone rather than blanking a round that has already paid.
-            if (result.serverFreeSpinTotalWin.HasValue)
+            freeSpinsUsed++;
+            freeSpinsRemaining = result.freeGame.spinsRemaining;
+            freeSpinsRoundWin = result.freeGame.roundWin;
+
+            // A retrigger animates the total up to its new figure; an ordinary spin just sets the
+            // counter. The retrigger's own count-up is started later, once the scatters have
+            // animated — this only records what it will count from.
+            if (result.freeGame.spinsAwarded)
             {
-                freeSpinsRoundWin = result.serverFreeSpinTotalWin.Value;
+                retriggerTotalBefore = totalBefore;
             }
-
-            // Absent on some spins — keep the last value rather than blanking the panel.
-            if (result.freeSpinsMultiplier.HasValue)
+            else if (freeGameView != null)
             {
-                currentMultiplier = result.freeSpinsMultiplier;
-            }
-
-            // Retrigger mid-round: the server just adds to freeSpinsRemaining, so the only thing
-            // to do is grow the round total. No pick sequence replays (agreed interim behaviour).
-            if (result.freeSpinData != null && result.freeSpinData.isTriggered)
-            {
-                freeSpinsTotalAwarded += result.freeSpinData.spinsAwarded;
-                if (!string.IsNullOrEmpty(result.freeSpinData.boxId))
-                {
-                    currentBoxId = result.freeSpinData.boxId;
-                }
-            }
-
-            freeSpinsUsed = Mathf.Max(0, freeSpinsTotalAwarded - freeSpinsRemaining);
-
-            if (freeGameView != null)
-            {
-                freeGameView.UpdateCounters(freeSpinsUsed, freeSpinsTotalAwarded, currentMultiplier);
+                freeGameView.UpdateCounter(freeSpinsRemaining, FreeSpinsTotalAwarded);
             }
         }
     }
@@ -489,22 +523,13 @@ public class GameManager : MonoBehaviour
 
         uiManager.OnSpinCompleted(lastResult);
 
-        // Extract server-authoritative values before nullifying lastResult
-        int serverSpinsRemaining = lastResult.serverSpinsRemaining;
-        bool isRoundOver = lastResult.isRoundOver;
-
-        // Note: freeSpinsRemaining already updated in OnSpinResultReceived
-        // Keeping this for safety in case OnSpinResultReceived wasn't called
-        if (isInFreeSpins && freeSpinsRemaining != serverSpinsRemaining)
+        // A trigger is a spin that awarded spins while not itself being a free spin — the awarding
+        // spin is an ordinary paid base spin. A retrigger has spinsAwarded set too, but with
+        // isFreeGame true, and needs nothing here: the extra spins are already in spinsRemaining.
+        FreeGameData freeGame = lastResult.freeGame;
+        if (!isInFreeSpins && freeGame != null && freeGame.spinsAwarded && !freeGame.isFreeGame)
         {
-            freeSpinsRemaining = serverSpinsRemaining;
-        }
-
-
-        // Check if free spins were just triggered (initial trigger from base game)
-        if (lastResult.freeSpinData != null && lastResult.freeSpinData.isTriggered && !isInFreeSpins)
-        {
-            StartFreeSpins(lastResult.freeSpinData.spinsAwarded, lastResult.freeSpinData.boxId);
+            StartFreeSpins(freeGame.spinsRemaining);
             lastResult = null;
             return;
         }
@@ -545,13 +570,11 @@ public class GameManager : MonoBehaviour
         }
         else if (isInFreeSpins)
         {
-            // Free spin counter already updated in OnSpinResultReceived
-            // No need to update again here
-
-            if (isRoundOver || freeSpinsRemaining <= 0)
+            // Counters were updated in OnSpinResultReceived. spinsRemaining is the count *after*
+            // this spin, so zero means the round is done — there is no separate round-over flag.
+            if (freeSpinsRemaining <= 0)
             {
-                // Round totals are ours — the server never sends an aggregate.
-                EndFreeSpins(freeSpinsRoundWin, freeSpinsUsed);
+                EndFreeSpins();
             }
             else
             {
@@ -649,18 +672,16 @@ public class GameManager : MonoBehaviour
 
     #region Free Spins
 
-    private void StartFreeSpins(int spins, string boxId)
+    // Entered from a base spin that awarded spins. There is no pick and no player choice over the
+    // prize — Golden Dynasty awards a flat count on 3+ scatters — but the player does choose when
+    // the round begins, via the Start button that replaces Spin.
+    private void StartFreeSpins(int spins)
     {
         isInFreeSpins = true;
         freeSpinsRemaining = spins;
         freeSpinsUsed = 0;
-        waitingForFreeSpinStart = true;
-
-        // Fresh round — reset every accumulator before the first spin lands.
-        freeSpinsTotalAwarded = spins;
         freeSpinsRoundWin = 0;
-        currentBoxId = boxId;
-        currentMultiplier = null;
+        retriggerTotalBefore = -1;
 
         AudioManager.Instance?.PlayFreeSpinBg();
 
@@ -675,36 +696,30 @@ public class GameManager : MonoBehaviour
             savedAutoPlayRemainingRounds = (prevTotal != -1) ? (prevRemaining - 1) : -1;
         }
 
-        // The view runs the frame/pick/reveal sequence and calls back when the player has chosen.
-        if (freeGameView != null)
-        {
-            freeGameView.PlayIntroSequence(boxId, spins, OnFreeGamesIntroComplete);
-        }
-        else
-        {
-            OnFreeGamesIntroComplete();
-        }
+        // The prompt pulses until the player acts; the scatters keep animating underneath it,
+        // started by DelayScatterTriggerResult and stopped by the first free spin.
+        if (freeGameView != null) freeGameView.ShowAwardPrompt();
 
-        currentState = GameState.Idle;
-    }
-
-    // Pick sequence finished — hand control to the player via the Start button.
-    private void OnFreeGamesIntroComplete()
-    {
         uiManager.SetFreeGamesButtonLock(true);
         uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.FreeGamesStart);
+
         currentState = GameState.Idle;
     }
 
+    // The Start button — routed here by UIManager's FreeGamesStart mode. The prompt becomes the
+    // counter, the total counts up from 0, and the first spin follows.
     internal void StartFirstFreeSpin()
     {
-        waitingForFreeSpinStart = false;
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.FreeGamesStart, interactable: false);
 
-        if (freeGameView != null) freeGameView.ShowMultiplierPanel();
+        if (freeGameView == null)
+        {
+            StartCoroutine(DelayBeforeFirstFreeSpin());
+            return;
+        }
 
-        StartCoroutine(DelayBeforeFirstFreeSpin());
+        freeGameView.PlayCounterIntro(FreeSpinsTotalAwarded, () => StartCoroutine(DelayBeforeFirstFreeSpin()));
     }
-
 
     private IEnumerator DelayBeforeFirstFreeSpin()
     {
@@ -725,22 +740,23 @@ public class GameManager : MonoBehaviour
         RequestSpin();
     }
 
-    private void EndFreeSpins(double totalRoundWin, int totalSpinsUsed)
+    private void EndFreeSpins()
     {
+        double roundWin = freeSpinsRoundWin;
+
         isInFreeSpins = false;
         freeSpinsRemaining = 0;
         AudioManager.Instance?.PlayMainBg();
 
-        // Free spins skip the per-line cycle too, so the final spin is parked after Phase 1. Start
-        // it here rather than after the summary: it runs on the reels underneath while the summary
-        // plays on top, so the player isn't kept waiting and still sees it once they take the win.
-        // Must come after isInFreeSpins is cleared — PlayWinLineCycle is a no-op during free spins.
+        // Free spins skip the per-line cycle, so the final spin is parked after Phase 1. Start it
+        // here so it plays on the reels beneath the closing summary rather than making the player
+        // wait for it afterwards. Must come after isInFreeSpins is cleared — PlayWinLineCycle is a
+        // no-op during free spins.
         if (slotView != null) slotView.PlayWinLineCycle();
 
-        // The view shows the closing summary and waits on the Take button before calling back.
         if (freeGameView != null)
         {
-            freeGameView.PlayOutroSequence(totalRoundWin, OnFreeGamesOutroComplete);
+            freeGameView.PlayOutroSequence(roundWin, OnFreeGamesCountUpComplete, OnFreeGamesOutroComplete);
         }
         else
         {
@@ -748,14 +764,19 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // Player pressed Take and the closing fade finished — restore the base game.
+    // The summary's total has finished counting up — Take becomes pressable. FreeGameView owns
+    // what happens on the press and calls back through OnFreeGamesOutroComplete.
+    private void OnFreeGamesCountUpComplete()
+    {
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.FreeGamesTake);
+    }
+
+    // Player took the win and the closing fade finished — restore the base game.
     private void OnFreeGamesOutroComplete()
     {
-        freeSpinsTotalAwarded = 0;
-        freeSpinsRoundWin = 0;
         freeSpinsUsed = 0;
-        currentBoxId = null;
-        currentMultiplier = null;
+        freeSpinsRoundWin = 0;
+        retriggerTotalBefore = -1;
 
         uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.Spin);
         uiManager.SetFreeGamesButtonLock(false);

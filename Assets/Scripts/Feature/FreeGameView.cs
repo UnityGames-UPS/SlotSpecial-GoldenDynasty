@@ -1,67 +1,46 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using DG.Tweening;
 
 /// <summary>
-/// Presentation for the free games (pick-a-box) bonus: the trigger frame, the mystery box pick,
-/// the prize reveal, the persistent multiplier / X-of-Y displays, and the closing total-win
-/// summary.
+/// Presentation for the Free Games feature: the award prompt, the spins counter, and the closing
+/// summary. See Assets/Scripts/MD/FreeGames.MD for the behaviour this implements.
 ///
 /// View layer only. GameManager drives this via the public methods below and receives callbacks
-/// when a sequence finishes — this script never calls back into the game loop (no RequestSpin,
-/// no state changes). Attach to a GameObject that stays active for the whole session, NOT to the
-/// frame itself: deactivating the frame would halt these coroutines mid-sequence.
+/// when a sequence finishes — this script never calls back into the game loop (no RequestSpin, no
+/// state changes). Attach to a GameObject that stays active for the whole session, NOT to the
+/// counter or summary graphics themselves: deactivating those would halt these coroutines
+/// mid-sequence.
+///
+/// The Mystery reveal is deliberately NOT here. It draws over the reels, between them landing and
+/// the win animations, so it belongs to SlotView along with the rest of the reel presentation.
 /// </summary>
 public class FreeGameView : MonoBehaviour
 {
-    // Pairs a free-games prize tier with the prefab that shows it. Prefab names already match the
-    // spin counts (5/8/10/15FreeGames), so the award count alone selects the right one — no need
-    // to map the server's boxId string, which keeps an unexpected boxId from breaking the reveal.
-    [Serializable]
-    public class PrizeFront
-    {
-        public int awardedSpins;
-        public GameObject frontPrefab;
-    }
-
     [Header("References")]
     [SerializeField] private UIManager uiManager;
 
-    [Header("Frame")]
-    [Tooltip("Root of the free-games frame graphic. Scaled 0->1 on trigger, 1->0 after the pick.")]
-    [SerializeField] private GameObject frameRoot;
-    [SerializeField] private RectTransform frameRect;
+    [Header("Counter Graphic")]
+    [Tooltip("The graphic carrying the counter text. One object, three states across a round: the " +
+             "\"press start\" prompt, then the FREE GAME x OF y counter, then \"FEATURE COMPLETED\".")]
+    [SerializeField] private GameObject counterRoot;
+    [SerializeField] private CanvasGroup counterGroup;
+    [SerializeField] private TMPro.TMP_Text counterText;
 
-    [Header("Frame Text")]
-    [SerializeField] private CanvasGroup awardedTextGroup;      // "FREE GAMES AWARDED"
-    [SerializeField] private CanvasGroup chooseTextGroup;       // "CHOOSE YOUR FREE GAMES"
-    [Tooltip("Heading on the closing summary. The outro used to re-show awardedTextGroup, so the " +
-             "round ended on the same \"FREE GAMES AWARDED\" line it opened with.")]
-    [SerializeField] private CanvasGroup summaryTextGroup;
-    [Tooltip("Total win counter shown in the closing summary.")]
-    [SerializeField] private TMPro.TMP_Text totalWinText;
+    [Header("Closing Summary")]
+    [Tooltip("The graphic shown at the end of a round, holding the total-win counter.")]
+    [SerializeField] private GameObject summaryRoot;
+    [SerializeField] private CanvasGroup summaryGroup;
+    [SerializeField] private TMPro.TMP_Text summaryWinText;
 
-    [Header("Mystery Boxes")]
-    [Tooltip("The 4 positions the mystery boxes are placed into, left to right.")]
-    [SerializeField] private Transform[] boxSlots = new Transform[4];
-    [Tooltip("The face-down purple box shown before the pick.")]
-    [SerializeField] private GameObject mysteryBackPrefab;
-    [Tooltip("One entry per prize tier. Matched against the server's awardedSpins.")]
-    [SerializeField] private PrizeFront[] prizeFronts = new PrizeFront[4];
-
-    [Header("Multiplier Panel")]
-    [SerializeField] private GameObject multiplierPanelRoot;
-    [SerializeField] private TMPro.TMP_Text multiplierValueText;
-    // Same reasoning as the timing block below — code-owned, not overridable by the scene.
-    private const float multiplierPulseScale = 1.15f;
-    private const float multiplierPulseDuration = 0.6f;
-
-    [Header("Free Games Counter")]
-    [SerializeField] private GameObject freeSpinCountContainer;
-    [SerializeField] private TMPro.TMP_Text remainingFreeSpinsText;
+    [Header("Overlays")]
+    [Tooltip("The 'top' parent holding the payout values. Faded to 0 and back during the closing sequence.")]
+    [SerializeField] private CanvasGroup topGroup;
+    [Tooltip("Dark overlay that sits behind the summary graphic, over the reels and background.")]
+    [SerializeField] private CanvasGroup darkOverlayGroup;
+    [SerializeField] private CanvasGroup fadeToBlackGroup;
 
     [Header("Background Swap")]
     [Tooltip("The SlotObject image — swapped for the whole feature, reverted on the closing fade.")]
@@ -72,131 +51,108 @@ public class FreeGameView : MonoBehaviour
     [SerializeField] private Sprite reelBackgroundNormalSprite;
     [SerializeField] private Sprite reelBackgroundFreeGamesSprite;
 
-    [Header("Closing Fade")]
-    [SerializeField] private CanvasGroup fadeToBlackGroup;
-
-    // Deliberately NOT [SerializeField]. These were serialized, which meant the scene's saved
-    // values silently overrode any change made here — retuning in code appeared to do nothing.
-    // Tuning these is now a code edit, and the code is the single source of truth.
-    private const float frameOpenDuration = 1.25f;
-    private const float frameCloseDuration = 1.0f;
-    private const float textFadeDuration = 0.4f;
-    private const float awardedTextHold = 2.0f;
-    private const float revealHold = 1.5f;
-    private const float boxCrossfadeDuration = 0.4f;
+    // Deliberately NOT [SerializeField]. These were serialized on the old view, which meant the
+    // scene's saved values silently overrode any change made here — retuning in code appeared to do
+    // nothing. Code is the single source of truth; the trade is that they need a recompile.
+    private const float promptPulseAlpha = 0.25f;      // alpha the prompt text dips to
+    private const float promptPulseDuration = 0.7f;
+    private const float counterCountUpDuration = 1.0f;
     private const float totalWinCountUpDuration = 2.0f;
-    private const float fadeToBlackDuration = 0.5f;
-    // Applied to both the face-down back and the prize front, since they crossfade in the same
-    // slot — a mismatch would make the reveal jump in size. Has to live here rather than on the
-    // prefabs: CenterInSlot overwrites localScale on every instantiate.
-    private const float boxScale = 0.85f;
+    private const float overlayFadeDuration = 0.5f;
+    private const float darkOverlayAlpha = 0.75f;
+    private const float summaryHoldBeforeCountUp = 0.3f;
 
-    // Live box instances for the current round, destroyed on reset.
-    private readonly List<GameObject> spawnedBacks = new List<GameObject>();
-    private readonly List<GameObject> spawnedFronts = new List<GameObject>();
+    private const string PromptText = "PRESS START FEATURE BUTTON";
+    private const string CompletedText = "FEATURE COMPLETED";
 
     private Coroutine activeSequence;
-    private Tween multiplierPulseTween;
+    private Tween promptPulseTween;
+    private Tween counterTween;
     private Tween totalWinTween;
-    private bool boxPicked;
-    private int pickedSlotIndex = -1;
     private Action pendingTakeCallback;
     private bool missingRefsLogged;
 
     #region Public API — called by GameManager
 
     /// <summary>
-    /// Frame in, text beats, box pick, prize reveal, frame out. Invokes onComplete once the
-    /// player has picked and the frame has closed.
+    /// Trigger landed: show the counter graphic with the pulsing "press start" prompt. The Start
+    /// button itself is UIManager's, so this only owns the text.
     /// </summary>
-    internal void PlayIntroSequence(string boxId, int awardedSpins, Action onComplete)
+    internal void ShowAwardPrompt()
+    {
+        if (!HasRequiredRefs()) return;
+
+        StopActiveSequence();
+        SwapBackgrounds(true);
+
+        SetGroupAlpha(counterGroup, 1f, true);
+        if (counterRoot != null) counterRoot.SetActive(true);
+        if (counterText != null) counterText.text = PromptText;
+
+        StartPromptPulse();
+    }
+
+    /// <summary>
+    /// Player pressed Start: stop the pulse and turn the prompt into the counter, with the total
+    /// counting up from 0. Invokes onComplete once the count-up finishes, which is the cue to spin.
+    /// </summary>
+    internal void PlayCounterIntro(int total, Action onComplete)
     {
         if (!HasRequiredRefs())
         {
-            // UI not built/wired yet — skip straight through so the round still runs.
             onComplete?.Invoke();
             return;
         }
 
         StopActiveSequence();
-        activeSequence = StartCoroutine(IntroRoutine(boxId, awardedSpins, onComplete));
+        activeSequence = StartCoroutine(CounterIntroRoutine(total, onComplete));
     }
 
-    /// <summary>Shows the multiplier panel and starts its continuous pulse.</summary>
-    internal void ShowMultiplierPanel()
+    /// <summary>Sets the counter with no animation. Called after every free spin.</summary>
+    internal void UpdateCounter(int remaining, int total)
     {
-        if (multiplierPanelRoot == null) return;
+        if (counterText == null) return;
 
-        multiplierPanelRoot.SetActive(true);
-        StartMultiplierPulse();
+        if (counterRoot != null) counterRoot.SetActive(true);
+        counterText.text = FormatCounter(remaining, total);
     }
 
     /// <summary>
-    /// Pushes the round's live numbers into the persistent displays. Called after every free spin.
-    /// A null multiplier means the server didn't send one for this spin — the previous value is
-    /// left on screen rather than blanking out.
+    /// Retrigger: animate the total up to its new value, the same way the opening sequence counts
+    /// up from 0. The remaining count is already the post-retrigger figure and is shown at once.
     /// </summary>
-    internal void UpdateCounters(int spinsUsed, int totalSpins, double? multiplier)
+    internal void AnimateTotalTo(int remaining, int fromTotal, int newTotal, Action onComplete)
     {
-        if (freeSpinCountContainer != null) freeSpinCountContainer.SetActive(true);
-        if (remainingFreeSpinsText != null)
+        if (!HasRequiredRefs() || counterText == null)
         {
-            remainingFreeSpinsText.text = $"FREE GAME  {spinsUsed}  OF  {totalSpins}";
+            onComplete?.Invoke();
+            return;
         }
 
-        if (multiplier.HasValue && multiplierValueText != null)
-        {
-            multiplierValueText.text = "X" + multiplier.Value.ToString("0.###");
-        }
+        StopActiveSequence();
+        activeSequence = StartCoroutine(CountTotalRoutine(remaining, fromTotal, newTotal, onComplete));
     }
 
     /// <summary>
-    /// Closing summary: frame reappears (no tween), total win counts up, Take button unlocks once
-    /// the count finishes, then fade to black, reset, fade back. onComplete fires after the fade.
+    /// The closing sequence. onCountUpComplete fires when the total-win count-up finishes — that is
+    /// the controller's cue to make Take pressable. onComplete fires after the player has taken the
+    /// win and everything has faded out.
     /// </summary>
-    internal void PlayOutroSequence(double totalRoundWin, Action onComplete)
+    internal void PlayOutroSequence(double roundWin, Action onCountUpComplete, Action onComplete)
     {
         if (!HasRequiredRefs())
         {
             ResetToDefault();
+            onCountUpComplete?.Invoke();
             onComplete?.Invoke();
             return;
         }
 
         StopActiveSequence();
-        activeSequence = StartCoroutine(OutroRoutine(totalRoundWin, onComplete));
+        activeSequence = StartCoroutine(OutroRoutine(roundWin, onCountUpComplete, onComplete));
     }
 
-    /// <summary>
-    /// Puts everything back the way the base game expects it. Safe to call at any point.
-    /// </summary>
-    internal void ResetToDefault()
-    {
-        StopActiveSequence();
-        StopMultiplierPulse();
-
-        if (totalWinTween != null) { totalWinTween.Kill(); totalWinTween = null; }
-
-        SwapBackgrounds(false);
-        DestroyBoxes();
-
-        if (frameRect != null) frameRect.DOKill();
-        if (frameRoot != null) frameRoot.SetActive(false);
-        if (multiplierPanelRoot != null) multiplierPanelRoot.SetActive(false);
-        if (freeSpinCountContainer != null) freeSpinCountContainer.SetActive(false);
-
-        SetGroupAlpha(awardedTextGroup, 0f, false);
-        SetGroupAlpha(chooseTextGroup, 0f, false);
-        SetGroupAlpha(summaryTextGroup, 0f, false);
-
-        pendingTakeCallback = null;
-        boxPicked = false;
-        pickedSlotIndex = -1;
-    }
-
-    /// <summary>
-    /// Invoked by UIManager when the player presses Take on the closing summary.
-    /// </summary>
+    /// <summary>Invoked by UIManager when the player presses Take on the closing summary.</summary>
     internal void OnTakePressed()
     {
         var callback = pendingTakeCallback;
@@ -204,200 +160,147 @@ public class FreeGameView : MonoBehaviour
         callback?.Invoke();
     }
 
+    /// <summary>Puts everything back the way the base game expects it. Safe to call at any point.</summary>
+    internal void ResetToDefault()
+    {
+        StopActiveSequence();
+        StopPromptPulse();
+
+        if (counterTween != null) { counterTween.Kill(); counterTween = null; }
+        if (totalWinTween != null) { totalWinTween.Kill(); totalWinTween = null; }
+
+        SwapBackgrounds(false);
+
+        if (counterRoot != null) counterRoot.SetActive(false);
+        if (summaryRoot != null) summaryRoot.SetActive(false);
+
+        SetGroupAlpha(counterGroup, 0f, false);
+        SetGroupAlpha(summaryGroup, 0f, false);
+        SetGroupAlpha(darkOverlayGroup, 0f, false);
+        SetGroupAlpha(fadeToBlackGroup, 0f, false);
+        SetGroupAlpha(topGroup, 1f, true);
+
+        pendingTakeCallback = null;
+    }
+
     #endregion
 
-    #region Intro
+    #region Intro / counter
 
-    private IEnumerator IntroRoutine(string boxId, int awardedSpins, Action onComplete)
+    private IEnumerator CounterIntroRoutine(int total, Action onComplete)
     {
-        boxPicked = false;
-        pickedSlotIndex = -1;
+        StopPromptPulse();
+        SetGroupAlpha(counterGroup, 1f, true);
 
-        // Backgrounds swap at the same moment the frame starts growing, and stay swapped for the
-        // entire feature — they only revert on the closing fade.
-        SwapBackgrounds(true);
-
-        SetGroupAlpha(chooseTextGroup, 0f, false);
-        SetGroupAlpha(summaryTextGroup, 0f, false);
-        if (totalWinText != null) totalWinText.gameObject.SetActive(false);
-
-        // "FREE GAMES AWARDED" is already on screen as the frame grows, so it scales up with it
-        // rather than appearing once the frame has settled.
-        SetGroupAlpha(awardedTextGroup, 1f, true);
-
-        frameRoot.SetActive(true);
-        frameRect.localScale = Vector3.zero;
-
-        // Cue lands with the frame starting to grow, since the text is visible from that moment.
-        AudioManager.Instance?.PlayFreeGamesAwarded();
-
-        yield return frameRect.DOScale(1f, frameOpenDuration).SetEase(Ease.OutQuad).WaitForCompletion();
-
-        // Hold at full size, then clear it to make way for the pick.
-        yield return new WaitForSeconds(awardedTextHold);
-        yield return FadeGroup(awardedTextGroup, 0f);
-
-        // "CHOOSE YOUR FREE GAMES" plus the boxes.
-        SpawnBoxes(boxId, awardedSpins);
-        AudioManager.Instance?.PlayChooseFreeGames();
-        yield return FadeGroup(chooseTextGroup, 1f);
-
-        yield return new WaitUntil(() => boxPicked);
-
-        // Only the picked box crossfades — the other three stay exactly as they are.
-        yield return CrossfadePickedBox();
-        yield return new WaitForSeconds(revealHold);
-
-        yield return frameRect.DOScale(0f, frameCloseDuration).SetEase(Ease.InQuad).WaitForCompletion();
-        frameRoot.SetActive(false);
-        SetGroupAlpha(chooseTextGroup, 0f, false);
-        DestroyBoxes();
-
-        if (freeSpinCountContainer != null) freeSpinCountContainer.SetActive(true);
-        UpdateCounters(0, awardedSpins, null);
+        yield return CountTotal(total, 0, total);
 
         activeSequence = null;
         onComplete?.Invoke();
     }
 
-    private void SpawnBoxes(string boxId, int awardedSpins)
+    private IEnumerator CountTotalRoutine(int remaining, int fromTotal, int newTotal, Action onComplete)
     {
-        DestroyBoxes();
+        yield return CountTotal(remaining, fromTotal, newTotal);
 
-        GameObject frontPrefab = ResolveFrontPrefab(awardedSpins, boxId);
-
-        // One entry per slot either way — the lists are indexed by slot, so a missing slot or
-        // prefab still has to occupy its position.
-        for (int i = 0; i < boxSlots.Length; i++)
-        {
-            Transform slot = boxSlots[i];
-
-            GameObject front = null;
-            GameObject back = null;
-
-            if (slot != null)
-            {
-                // The front is instantiated first so it sits behind the back in sibling order.
-                // The prize is already decided server-side, so every slot hides the same front.
-                if (frontPrefab != null)
-                {
-                    front = Instantiate(frontPrefab, slot);
-                    CenterInSlot(front);
-                    EnsureCanvasGroup(front).alpha = 0f;
-                }
-
-                if (mysteryBackPrefab != null)
-                {
-                    back = Instantiate(mysteryBackPrefab, slot);
-                    CenterInSlot(back);
-                    EnsureCanvasGroup(back).alpha = 1f;
-
-                    int slotIndex = i;
-                    Button button = EnsureButton(back);
-                    button.onClick.AddListener(() => OnBoxClicked(slotIndex));
-                }
-            }
-
-            spawnedFronts.Add(front);
-            spawnedBacks.Add(back);
-        }
+        activeSequence = null;
+        onComplete?.Invoke();
     }
 
-    // Selection is by awarded spin count, which the prefabs are already named after. boxId is
-    // accepted only so an unexpected value can be logged rather than silently mis-revealing.
-    private GameObject ResolveFrontPrefab(int awardedSpins, string boxId)
+    // Shared by the opening count-up (0 -> total) and a retrigger (old total -> new total).
+    private IEnumerator CountTotal(int remaining, int fromTotal, int toTotal)
     {
-        if (prizeFronts == null || prizeFronts.Length == 0) return null;
+        if (counterText == null) yield break;
 
-        foreach (var entry in prizeFronts)
-        {
-            if (entry != null && entry.awardedSpins == awardedSpins && entry.frontPrefab != null)
-            {
-                return entry.frontPrefab;
-            }
-        }
+        if (counterRoot != null) counterRoot.SetActive(true);
 
-        Debug.LogWarning($"[FreeGameView] No prize front configured for {awardedSpins} free games (boxId '{boxId}'). Falling back to the first entry.");
-        foreach (var entry in prizeFronts)
+        bool done = false;
+        if (counterTween != null) counterTween.Kill();
+
+        counterTween = DOVirtual.Int(fromTotal, toTotal, counterCountUpDuration, value =>
         {
-            if (entry != null && entry.frontPrefab != null) return entry.frontPrefab;
-        }
-        return null;
+            if (counterText != null) counterText.text = FormatCounter(remaining, value);
+        }).OnComplete(() =>
+        {
+            if (counterText != null) counterText.text = FormatCounter(remaining, toTotal);
+            counterTween = null;
+            done = true;
+        });
+
+        yield return new WaitUntil(() => done);
     }
 
-    private void OnBoxClicked(int slotIndex)
+    // Single definition of the counter's wording, so the intro, the per-spin update and a retrigger
+    // can never drift apart.
+    private static string FormatCounter(int remaining, int total)
     {
-        if (boxPicked) return;
-
-        boxPicked = true;
-        pickedSlotIndex = slotIndex;
-
-        // Lock all four the instant one is chosen.
-        foreach (var back in spawnedBacks)
-        {
-            if (back == null) continue;
-            Button button = back.GetComponent<Button>();
-            if (button != null) button.interactable = false;
-        }
+        return $"FREE GAME  {remaining}  OF  {total}";
     }
 
-    private IEnumerator CrossfadePickedBox()
+    private void StartPromptPulse()
     {
-        if (pickedSlotIndex < 0) yield break;
+        StopPromptPulse();
+        if (counterGroup == null) return;
 
-        AudioManager.Instance?.PlayCardReveal();
+        counterGroup.alpha = 1f;
+        promptPulseTween = counterGroup
+            .DOFade(promptPulseAlpha, promptPulseDuration)
+            .SetEase(Ease.InOutSine)
+            .SetLoops(-1, LoopType.Yoyo);
+    }
 
-        CanvasGroup backGroup = GetGroupAt(spawnedBacks, pickedSlotIndex);
-        CanvasGroup frontGroup = GetGroupAt(spawnedFronts, pickedSlotIndex);
+    private void StopPromptPulse()
+    {
+        if (promptPulseTween != null)
+        {
+            promptPulseTween.Kill();
+            promptPulseTween = null;
+        }
 
-        if (backGroup != null) backGroup.DOFade(0f, boxCrossfadeDuration);
-        if (frontGroup != null) yield return frontGroup.DOFade(1f, boxCrossfadeDuration).WaitForCompletion();
-        else yield return new WaitForSeconds(boxCrossfadeDuration);
+        if (counterGroup != null) counterGroup.alpha = 1f;
     }
 
     #endregion
 
     #region Outro
 
-    private IEnumerator OutroRoutine(double totalRoundWin, Action onComplete)
+    private IEnumerator OutroRoutine(double roundWin, Action onCountUpComplete, Action onComplete)
     {
-        StopMultiplierPulse();
-        if (multiplierPanelRoot != null) multiplierPanelRoot.SetActive(false);
+        // 1. Dark overlay up and the payout values out. This lands BEFORE the text changes, which
+        //    looks mistimed but is the intended order — see FreeGames.MD.
+        if (darkOverlayGroup != null) darkOverlayGroup.gameObject.SetActive(true);
+        Tween overlayIn = darkOverlayGroup != null ? darkOverlayGroup.DOFade(darkOverlayAlpha, overlayFadeDuration) : null;
+        Tween topOut = topGroup != null ? topGroup.DOFade(0f, overlayFadeDuration) : null;
 
-        // Reappears at full size with no tween, unlike the trigger.
-        frameRoot.SetActive(true);
-        frameRect.DOKill();
-        frameRect.localScale = Vector3.one;
+        if (topOut != null) yield return topOut.WaitForCompletion();
+        else if (overlayIn != null) yield return overlayIn.WaitForCompletion();
+        else yield return new WaitForSeconds(overlayFadeDuration);
 
-        SetGroupAlpha(summaryTextGroup, 1f, true);
-        // Both of the intro's headings are cleared explicitly. They should already be down by now,
-        // but a round cut short earlier could otherwise leave one stacked behind the summary.
-        SetGroupAlpha(awardedTextGroup, 0f, false);
-        SetGroupAlpha(chooseTextGroup, 0f, false);
+        // 2. Everything fades back in.
+        if (topGroup != null) yield return topGroup.DOFade(1f, overlayFadeDuration).WaitForCompletion();
 
-        // Take is visible from the start of the summary but greyed out until the count-up ends.
-        bool takePressed = false;
-        pendingTakeCallback = () => takePressed = true;
-        if (uiManager != null) uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.FreeGamesTake, false);
+        // 3. The counter becomes the completion notice.
+        if (counterText != null) counterText.text = CompletedText;
+        SetGroupAlpha(counterGroup, 1f, true);
 
+        // 4. The summary graphic appears.
+        if (summaryRoot != null) summaryRoot.SetActive(true);
+        SetGroupAlpha(summaryGroup, 1f, true);
+        if (summaryWinText != null) summaryWinText.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
+
+        yield return new WaitForSeconds(summaryHoldBeforeCountUp);
+
+        // 5. The round's total counts up.
         bool countUpDone = false;
-        if (totalWinText != null)
+        if (summaryWinText != null)
         {
-            totalWinText.gameObject.SetActive(true);
-            totalWinText.text = SpriteTextFormatter.ToSpriteMoney(0);
+            if (totalWinTween != null) totalWinTween.Kill();
 
-            totalWinTween = DOVirtual.Float(0f, (float)totalRoundWin, totalWinCountUpDuration, value =>
+            totalWinTween = DOVirtual.Float(0f, (float)roundWin, totalWinCountUpDuration, value =>
             {
-                if (totalWinText != null)
-                {
-                    totalWinText.text = SpriteTextFormatter.ToSpriteMoney(value);
-                }
+                if (summaryWinText != null) summaryWinText.text = value.ToString(SpriteTextFormatter.MoneyFormat);
             }).OnComplete(() =>
             {
-                if (totalWinText != null)
-                {
-                    totalWinText.text = SpriteTextFormatter.ToSpriteMoney(totalRoundWin);
-                }
+                if (summaryWinText != null) summaryWinText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
                 totalWinTween = null;
                 countUpDone = true;
             });
@@ -405,41 +308,39 @@ public class FreeGameView : MonoBehaviour
             yield return new WaitUntil(() => countUpDone);
         }
 
-        // Count-up finished — Take becomes pressable.
-        if (uiManager != null) uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.FreeGamesTake, true);
+        // 6. Count-up finished — the controller turns the button into a pressable Take.
+        bool takePressed = false;
+        pendingTakeCallback = () => takePressed = true;
+        onCountUpComplete?.Invoke();
 
+        // 7. The summary holds until the player takes the win.
         yield return new WaitUntil(() => takePressed);
 
-        yield return FadeToBlack(1f);
-
-        // Everything reverts while the screen is covered.
-        frameRoot.SetActive(false);
-        SetGroupAlpha(summaryTextGroup, 0f, false);
-        if (totalWinText != null) totalWinText.gameObject.SetActive(false);
-        if (freeSpinCountContainer != null) freeSpinCountContainer.SetActive(false);
-        SwapBackgrounds(false);
-        DestroyBoxes();
-
-        yield return FadeToBlack(0f);
+        // 8. Everything free-games fades out together, the completion notice included.
+        yield return FadeOutRoundElements();
 
         activeSequence = null;
         onComplete?.Invoke();
     }
 
-    private IEnumerator FadeToBlack(float targetAlpha)
+    private IEnumerator FadeOutRoundElements()
     {
-        if (fadeToBlackGroup == null)
-        {
-            yield break;
-        }
+        SwapBackgrounds(false);
 
-        fadeToBlackGroup.gameObject.SetActive(true);
-        yield return fadeToBlackGroup.DOFade(targetAlpha, fadeToBlackDuration).WaitForCompletion();
+        Tween summaryOut = summaryGroup != null ? summaryGroup.DOFade(0f, overlayFadeDuration) : null;
+        Tween counterOut = counterGroup != null ? counterGroup.DOFade(0f, overlayFadeDuration) : null;
+        Tween overlayOut = darkOverlayGroup != null ? darkOverlayGroup.DOFade(0f, overlayFadeDuration) : null;
 
-        if (Mathf.Approximately(targetAlpha, 0f))
-        {
-            fadeToBlackGroup.gameObject.SetActive(false);
-        }
+        if (summaryOut != null) yield return summaryOut.WaitForCompletion();
+        else if (counterOut != null) yield return counterOut.WaitForCompletion();
+        else if (overlayOut != null) yield return overlayOut.WaitForCompletion();
+        else yield return new WaitForSeconds(overlayFadeDuration);
+
+        if (summaryRoot != null) summaryRoot.SetActive(false);
+        if (counterRoot != null) counterRoot.SetActive(false);
+        if (darkOverlayGroup != null) darkOverlayGroup.gameObject.SetActive(false);
+
+        SetGroupAlpha(topGroup, 1f, true);
     }
 
     #endregion
@@ -462,42 +363,6 @@ public class FreeGameView : MonoBehaviour
         }
     }
 
-    private void StartMultiplierPulse()
-    {
-        StopMultiplierPulse();
-        if (multiplierValueText == null) return;
-
-        multiplierValueText.transform.localScale = Vector3.one;
-        multiplierPulseTween = multiplierValueText.transform
-            .DOScale(multiplierPulseScale, multiplierPulseDuration)
-            .SetEase(Ease.InOutSine)
-            .SetLoops(-1, LoopType.Yoyo);
-    }
-
-    private void StopMultiplierPulse()
-    {
-        if (multiplierPulseTween != null)
-        {
-            multiplierPulseTween.Kill();
-            multiplierPulseTween = null;
-        }
-
-        if (multiplierValueText != null)
-        {
-            multiplierValueText.transform.localScale = Vector3.one;
-        }
-    }
-
-    private IEnumerator FadeGroup(CanvasGroup group, float targetAlpha)
-    {
-        if (group == null) yield break;
-
-        group.gameObject.SetActive(true);
-        yield return group.DOFade(targetAlpha, textFadeDuration).WaitForCompletion();
-
-        if (Mathf.Approximately(targetAlpha, 0f)) group.gameObject.SetActive(false);
-    }
-
     private void SetGroupAlpha(CanvasGroup group, float alpha, bool active)
     {
         if (group == null) return;
@@ -505,60 +370,6 @@ public class FreeGameView : MonoBehaviour
         group.DOKill();
         group.alpha = alpha;
         group.gameObject.SetActive(active);
-    }
-
-    private CanvasGroup GetGroupAt(List<GameObject> list, int index)
-    {
-        if (index < 0 || index >= list.Count) return null;
-        GameObject go = list[index];
-        return go != null ? go.GetComponent<CanvasGroup>() : null;
-    }
-
-    private void DestroyBoxes()
-    {
-        foreach (var go in spawnedBacks) { if (go != null) Destroy(go); }
-        foreach (var go in spawnedFronts) { if (go != null) Destroy(go); }
-        spawnedBacks.Clear();
-        spawnedFronts.Clear();
-    }
-
-    // The prefab roots carry whatever position they sit at on the info page, so zero the offset
-    // once instantiated — the slot's own position is what should place the box. Done in code
-    // rather than by editing the prefabs, which would move them on the info page too.
-    private void CenterInSlot(GameObject instance)
-    {
-        RectTransform rect = instance.transform as RectTransform;
-        if (rect == null) return;
-
-        rect.anchoredPosition = Vector2.zero;
-        rect.localScale = Vector3.one * boxScale;
-    }
-
-    // These are expected on the prefabs so they can be configured in the Inspector (button
-    // transition, hover/pressed sprites, etc.). One is still added as a fallback so a
-    // half-configured prefab doesn't break the round, but it warns — a runtime-added Button only
-    // ever gets Unity's defaults, so a warning here means the hover/pressed states are missing.
-    private CanvasGroup EnsureCanvasGroup(GameObject go)
-    {
-        CanvasGroup group = go.GetComponent<CanvasGroup>();
-        if (group == null)
-        {
-            Debug.LogWarning($"[FreeGameView] '{go.name}' has no CanvasGroup — add one to the prefab so its fade is authored rather than defaulted.", go);
-            group = go.AddComponent<CanvasGroup>();
-        }
-        return group;
-    }
-
-    private Button EnsureButton(GameObject go)
-    {
-        Button button = go.GetComponent<Button>();
-        if (button == null)
-        {
-            Debug.LogWarning($"[FreeGameView] '{go.name}' has no Button — add one to the prefab so its transition and hover/pressed states are authored rather than defaulted.", go);
-            button = go.AddComponent<Button>();
-        }
-        button.interactable = true;
-        return button;
     }
 
     private void StopActiveSequence()
@@ -574,12 +385,12 @@ public class FreeGameView : MonoBehaviour
     // Warn once, then let every sequence no-op straight to its callback so the round still runs.
     private bool HasRequiredRefs()
     {
-        if (frameRoot != null && frameRect != null) return true;
+        if (counterRoot != null && counterText != null) return true;
 
         if (!missingRefsLogged)
         {
             missingRefsLogged = true;
-            Debug.LogWarning("[FreeGameView] Frame references are not wired — free games will run without their presentation.");
+            Debug.LogWarning("[FreeGameView] Counter references are not wired — free games will run without their presentation.");
         }
         return false;
     }
