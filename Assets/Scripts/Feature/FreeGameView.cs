@@ -10,8 +10,8 @@ using DG.Tweening;
 ///
 /// View layer only. GameManager drives this via the public methods below and receives callbacks
 /// when a sequence finishes — this script never calls back into the game loop (no RequestSpin, no
-/// state changes). Attach to a GameObject that stays active for the whole session, NOT to the
-/// counter or summary graphics themselves: deactivating those would halt these coroutines
+/// state changes). Attach to a GameObject that stays active for the whole session, NOT to
+/// FreeGamesTexts or FreeGamesOver themselves: deactivating those would halt these coroutines
 /// mid-sequence.
 ///
 /// The Mystery reveal is deliberately NOT here. It draws over the reels, between them landing and
@@ -22,18 +22,31 @@ public class FreeGameView : MonoBehaviour
     [Header("References")]
     [SerializeField] private UIManager uiManager;
 
-    [Header("Counter Graphic")]
-    [Tooltip("The graphic carrying the counter text. One object, three states across a round: the " +
-             "\"press start\" prompt, then the FREE GAME x OF y counter, then \"FEATURE COMPLETED\".")]
-    [SerializeField] private GameObject counterRoot;
-    [SerializeField] private CanvasGroup counterGroup;
-    [SerializeField] private TMPro.TMP_Text counterText;
+    [Header("Counter Panel")]
+    [Tooltip("The FreeGamesTexts panel. Holds all three states below and fades out as one at the " +
+             "end of the round.")]
+    [SerializeField] private GameObject freeGamesTexts;
+    [SerializeField] private CanvasGroup freeGamesTextsGroup;
+
+    [Tooltip("The \"PRESS START FEATURE BUTTON\" graphic. Its own CanvasGroup, because the pulse " +
+             "is on this alone rather than the whole panel.")]
+    [SerializeField] private GameObject pressStartFeature;
+    [SerializeField] private CanvasGroup pressStartFeatureGroup;
+
+    [Tooltip("The \"FREE SPINS COMPLETED\" graphic shown once the round ends.")]
+    [SerializeField] private GameObject featureCompleted;
+
+    [Tooltip("The FreeGamesRemaining parent. Its static \"FREE GAMES ... OF ...\" label needs no " +
+             "reference — only the two numbers are written.")]
+    [SerializeField] private GameObject freeGamesRemaining;
+    [SerializeField] private TMPro.TMP_Text remainingFreeSpins;
+    [SerializeField] private TMPro.TMP_Text totalFreeSpins;
 
     [Header("Closing Summary")]
     [Tooltip("The graphic shown at the end of a round, holding the total-win counter.")]
-    [SerializeField] private GameObject summaryRoot;
-    [SerializeField] private CanvasGroup summaryGroup;
-    [SerializeField] private TMPro.TMP_Text summaryWinText;
+    [SerializeField] private GameObject freeGamesOver;
+    [SerializeField] private CanvasGroup freeGamesOverGroup;
+    [SerializeField] private TMPro.TMP_Text freeGamesWinAmount;
 
     [Header("Overlays")]
     [Tooltip("The 'top' parent holding the payout values. Faded to 0 and back during the closing sequence.")]
@@ -62,8 +75,9 @@ public class FreeGameView : MonoBehaviour
     private const float darkOverlayAlpha = 0.75f;
     private const float summaryHoldBeforeCountUp = 0.3f;
 
-    private const string PromptText = "PRESS START FEATURE BUTTON";
-    private const string CompletedText = "FEATURE COMPLETED";
+    // No wording lives here any more. The prompt and the completion notice are baked into their own
+    // graphics and the counter's "FREE GAMES ... OF ..." label is static, so this script only ever
+    // toggles which of the three is visible and writes the two numbers.
 
     private Coroutine activeSequence;
     private Tween promptPulseTween;
@@ -75,7 +89,7 @@ public class FreeGameView : MonoBehaviour
     #region Public API — called by GameManager
 
     /// <summary>
-    /// Trigger landed: show the counter graphic with the pulsing "press start" prompt. The Start
+    /// Trigger landed: show FreeGamesTexts with PressStartFeature pulsing. The Start
     /// button itself is UIManager's, so this only owns the text.
     /// </summary>
     internal void ShowAwardPrompt()
@@ -85,9 +99,9 @@ public class FreeGameView : MonoBehaviour
         StopActiveSequence();
         SwapBackgrounds(true);
 
-        SetGroupAlpha(counterGroup, 1f, true);
-        if (counterRoot != null) counterRoot.SetActive(true);
-        if (counterText != null) counterText.text = PromptText;
+        SetGroupAlpha(freeGamesTextsGroup, 1f, true);
+        if (freeGamesTexts != null) freeGamesTexts.SetActive(true);
+        ShowPanelState(prompt: true, remaining: false, completed: false);
 
         StartPromptPulse();
     }
@@ -111,10 +125,11 @@ public class FreeGameView : MonoBehaviour
     /// <summary>Sets the counter with no animation. Called after every free spin.</summary>
     internal void UpdateCounter(int remaining, int total)
     {
-        if (counterText == null) return;
+        if (freeGamesTexts != null) freeGamesTexts.SetActive(true);
+        ShowPanelState(prompt: false, remaining: true, completed: false);
 
-        if (counterRoot != null) counterRoot.SetActive(true);
-        counterText.text = FormatCounter(remaining, total);
+        if (remainingFreeSpins != null) remainingFreeSpins.text = remaining.ToString();
+        if (totalFreeSpins != null) totalFreeSpins.text = total.ToString();
     }
 
     /// <summary>
@@ -123,7 +138,7 @@ public class FreeGameView : MonoBehaviour
     /// </summary>
     internal void AnimateTotalTo(int remaining, int fromTotal, int newTotal, Action onComplete)
     {
-        if (!HasRequiredRefs() || counterText == null)
+        if (!HasRequiredRefs() || totalFreeSpins == null)
         {
             onComplete?.Invoke();
             return;
@@ -171,11 +186,13 @@ public class FreeGameView : MonoBehaviour
 
         SwapBackgrounds(false);
 
-        if (counterRoot != null) counterRoot.SetActive(false);
-        if (summaryRoot != null) summaryRoot.SetActive(false);
+        ShowPanelState(prompt: false, remaining: false, completed: false);
+        if (freeGamesTexts != null) freeGamesTexts.SetActive(false);
+        if (freeGamesOver != null) freeGamesOver.SetActive(false);
 
-        SetGroupAlpha(counterGroup, 0f, false);
-        SetGroupAlpha(summaryGroup, 0f, false);
+        if (pressStartFeatureGroup != null) pressStartFeatureGroup.alpha = 1f;
+        SetGroupAlpha(freeGamesTextsGroup, 0f, false);
+        SetGroupAlpha(freeGamesOverGroup, 0f, false);
         SetGroupAlpha(darkOverlayGroup, 0f, false);
         SetGroupAlpha(fadeToBlackGroup, 0f, false);
         SetGroupAlpha(topGroup, 1f, true);
@@ -190,7 +207,7 @@ public class FreeGameView : MonoBehaviour
     private IEnumerator CounterIntroRoutine(int total, Action onComplete)
     {
         StopPromptPulse();
-        SetGroupAlpha(counterGroup, 1f, true);
+        SetGroupAlpha(freeGamesTextsGroup, 1f, true);
 
         yield return CountTotal(total, 0, total);
 
@@ -206,22 +223,26 @@ public class FreeGameView : MonoBehaviour
         onComplete?.Invoke();
     }
 
-    // Shared by the opening count-up (0 -> total) and a retrigger (old total -> new total).
+    // Shared by the opening count-up (0 -> total) and a retrigger (old total -> new total). Only
+    // the total animates; the remaining count is already its final figure and is set once.
     private IEnumerator CountTotal(int remaining, int fromTotal, int toTotal)
     {
-        if (counterText == null) yield break;
+        if (freeGamesTexts != null) freeGamesTexts.SetActive(true);
+        ShowPanelState(prompt: false, remaining: true, completed: false);
 
-        if (counterRoot != null) counterRoot.SetActive(true);
+        if (remainingFreeSpins != null) remainingFreeSpins.text = remaining.ToString();
+
+        if (totalFreeSpins == null) yield break;
 
         bool done = false;
         if (counterTween != null) counterTween.Kill();
 
         counterTween = DOVirtual.Int(fromTotal, toTotal, counterCountUpDuration, value =>
         {
-            if (counterText != null) counterText.text = FormatCounter(remaining, value);
+            if (totalFreeSpins != null) totalFreeSpins.text = value.ToString();
         }).OnComplete(() =>
         {
-            if (counterText != null) counterText.text = FormatCounter(remaining, toTotal);
+            if (totalFreeSpins != null) totalFreeSpins.text = toTotal.ToString();
             counterTween = null;
             done = true;
         });
@@ -229,20 +250,24 @@ public class FreeGameView : MonoBehaviour
         yield return new WaitUntil(() => done);
     }
 
-    // Single definition of the counter's wording, so the intro, the per-spin update and a retrigger
-    // can never drift apart.
-    private static string FormatCounter(int remaining, int total)
+    // The panel's three states are mutually exclusive, so they are always set together rather than
+    // toggled individually — that way no combination of calls can leave two of them showing.
+    private void ShowPanelState(bool prompt, bool remaining, bool completed)
     {
-        return $"FREE GAME  {remaining}  OF  {total}";
+        if (pressStartFeature != null) pressStartFeature.SetActive(prompt);
+        if (freeGamesRemaining != null) freeGamesRemaining.SetActive(remaining);
+        if (featureCompleted != null) featureCompleted.SetActive(completed);
     }
 
+    // Pulses the prompt alone, not the whole panel — the panel's own group is reserved for the
+    // fade-out at the end of the round.
     private void StartPromptPulse()
     {
         StopPromptPulse();
-        if (counterGroup == null) return;
+        if (pressStartFeatureGroup == null) return;
 
-        counterGroup.alpha = 1f;
-        promptPulseTween = counterGroup
+        pressStartFeatureGroup.alpha = 1f;
+        promptPulseTween = pressStartFeatureGroup
             .DOFade(promptPulseAlpha, promptPulseDuration)
             .SetEase(Ease.InOutSine)
             .SetLoops(-1, LoopType.Yoyo);
@@ -256,7 +281,7 @@ public class FreeGameView : MonoBehaviour
             promptPulseTween = null;
         }
 
-        if (counterGroup != null) counterGroup.alpha = 1f;
+        if (pressStartFeatureGroup != null) pressStartFeatureGroup.alpha = 1f;
     }
 
     #endregion
@@ -278,29 +303,29 @@ public class FreeGameView : MonoBehaviour
         // 2. Everything fades back in.
         if (topGroup != null) yield return topGroup.DOFade(1f, overlayFadeDuration).WaitForCompletion();
 
-        // 3. The counter becomes the completion notice.
-        if (counterText != null) counterText.text = CompletedText;
-        SetGroupAlpha(counterGroup, 1f, true);
+        // 3. The counter gives way to the completion notice.
+        ShowPanelState(prompt: false, remaining: false, completed: true);
+        SetGroupAlpha(freeGamesTextsGroup, 1f, true);
 
-        // 4. The summary graphic appears.
-        if (summaryRoot != null) summaryRoot.SetActive(true);
-        SetGroupAlpha(summaryGroup, 1f, true);
-        if (summaryWinText != null) summaryWinText.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
+        // 4. FreeGamesOver appears.
+        if (freeGamesOver != null) freeGamesOver.SetActive(true);
+        SetGroupAlpha(freeGamesOverGroup, 1f, true);
+        if (freeGamesWinAmount != null) freeGamesWinAmount.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
 
         yield return new WaitForSeconds(summaryHoldBeforeCountUp);
 
         // 5. The round's total counts up.
         bool countUpDone = false;
-        if (summaryWinText != null)
+        if (freeGamesWinAmount != null)
         {
             if (totalWinTween != null) totalWinTween.Kill();
 
             totalWinTween = DOVirtual.Float(0f, (float)roundWin, totalWinCountUpDuration, value =>
             {
-                if (summaryWinText != null) summaryWinText.text = value.ToString(SpriteTextFormatter.MoneyFormat);
+                if (freeGamesWinAmount != null) freeGamesWinAmount.text = value.ToString(SpriteTextFormatter.MoneyFormat);
             }).OnComplete(() =>
             {
-                if (summaryWinText != null) summaryWinText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
+                if (freeGamesWinAmount != null) freeGamesWinAmount.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
                 totalWinTween = null;
                 countUpDone = true;
             });
@@ -327,8 +352,8 @@ public class FreeGameView : MonoBehaviour
     {
         SwapBackgrounds(false);
 
-        Tween summaryOut = summaryGroup != null ? summaryGroup.DOFade(0f, overlayFadeDuration) : null;
-        Tween counterOut = counterGroup != null ? counterGroup.DOFade(0f, overlayFadeDuration) : null;
+        Tween summaryOut = freeGamesOverGroup != null ? freeGamesOverGroup.DOFade(0f, overlayFadeDuration) : null;
+        Tween counterOut = freeGamesTextsGroup != null ? freeGamesTextsGroup.DOFade(0f, overlayFadeDuration) : null;
         Tween overlayOut = darkOverlayGroup != null ? darkOverlayGroup.DOFade(0f, overlayFadeDuration) : null;
 
         if (summaryOut != null) yield return summaryOut.WaitForCompletion();
@@ -336,8 +361,9 @@ public class FreeGameView : MonoBehaviour
         else if (overlayOut != null) yield return overlayOut.WaitForCompletion();
         else yield return new WaitForSeconds(overlayFadeDuration);
 
-        if (summaryRoot != null) summaryRoot.SetActive(false);
-        if (counterRoot != null) counterRoot.SetActive(false);
+        if (freeGamesOver != null) freeGamesOver.SetActive(false);
+        ShowPanelState(prompt: false, remaining: false, completed: false);
+        if (freeGamesTexts != null) freeGamesTexts.SetActive(false);
         if (darkOverlayGroup != null) darkOverlayGroup.gameObject.SetActive(false);
 
         SetGroupAlpha(topGroup, 1f, true);
@@ -385,7 +411,7 @@ public class FreeGameView : MonoBehaviour
     // Warn once, then let every sequence no-op straight to its callback so the round still runs.
     private bool HasRequiredRefs()
     {
-        if (counterRoot != null && counterText != null) return true;
+        if (freeGamesTexts != null && freeGamesRemaining != null) return true;
 
         if (!missingRefsLogged)
         {
