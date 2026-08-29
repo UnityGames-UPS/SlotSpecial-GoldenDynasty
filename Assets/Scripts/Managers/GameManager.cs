@@ -284,12 +284,9 @@ public class GameManager : MonoBehaviour
 
         if (lastResult != null)
         {
-            double featureDeferredWin = lastResult.GetTotalFeatureDeferredWins();
-            double reelStopBalance = lastResult.playerData != null ? (lastResult.playerData.balance - featureDeferredWin) : 0;
-
             playerData = new PlayerData
             {
-                balance = reelStopBalance,
+                balance = lastResult.playerData != null ? lastResult.playerData.balance : 0,
                 currentBetIndex = lastResult.playerData != null ? lastResult.playerData.currentBetIndex : currentBetIndex
             };
         }
@@ -837,28 +834,6 @@ public class GameManager : MonoBehaviour
     internal bool IsSpinning()
     {
         return currentState == GameState.Spinning || currentState == GameState.Stopping;
-    }
-
-    /// <summary>
-    /// Returns true if at least one scatter symbol appears anywhere in the result matrix.
-    /// Uses the server-configured scatterSymbolId (default 12) as the reference ID.
-    /// </summary>
-    private bool ResultMatrixHasScatter(List<List<int>> matrix)
-    {
-        if (matrix == null) return false;
-
-        int scatterId = gameConfig != null ? gameConfig.scatterSymbolId : 0;
-
-        foreach (var col in matrix)
-        {
-            if (col == null) continue;
-            foreach (int sym in col)
-            {
-                if (sym == scatterId) return true;
-            }
-        }
-
-        return false;
     }
 
     #endregion

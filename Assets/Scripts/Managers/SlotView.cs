@@ -185,6 +185,8 @@ public class SlotView : MonoBehaviour
     [SerializeField] private GameObject mysteryLayerRoot;
     [Tooltip("One entry per reel column, each holding the 3 row slots top to bottom. Same shape as the win layer — 5 columns of 3.")]
     [SerializeField] private List<AnimSlotColumn> mysterySlotColumns = new List<AnimSlotColumn>(5);
+    [Tooltip("Beat between the Mystery layer coming down and the win animations starting. Only spins that had a Mystery pay this. Distinct from winLineBoxToAnimationDelay, which sits INSIDE the win presentation, between raising its layer and starting its clips.")]
+    [SerializeField] private float mysteryToWinAnimationDelay = 0.1f;
 
     [Header("Phase 1 Total Win Presentation")]
     [SerializeField] private TMPro.TMP_Text phase1TotalWinText;
@@ -213,6 +215,10 @@ public class SlotView : MonoBehaviour
     // True while the win dim is being held up by the Mystery reveal, so the win presentation that
     // follows inherits it instead of dropping and re-raising it (which would flicker).
     private bool dimHeld;
+
+    // Cells that landed as a Mystery this spin, as flat indices. Captured when the reels are told
+    // to stop, so the landing write knows to draw a Mystery there instead of the revealed symbol.
+    private readonly HashSet<int> mysteryCells = new HashSet<int>();
 
 
     internal List<List<int>> currentDisplayMatrix;
@@ -468,11 +474,25 @@ public class SlotView : MonoBehaviour
         var reel = reelImagesList[columnIndex];
         if (reel.displayImages == null) return;
 
+        int mysteryId = (gameManager != null && gameManager.gameConfig != null)
+            ? gameManager.gameConfig.mysterySymbolId
+            : -1;
+
         for (int row = 0; row < rowCount; row++)
         {
             if (row < reel.displayImages.Count && reel.displayImages[row] != null)
             {
                 int symbolId = visibleSymbolIds[row];
+
+                // A cell that landed as a Mystery shows the Mystery, not what it revealed into.
+                // The server's matrix is post-reveal, so without this override the player would see
+                // the answer the instant the reel stopped and only then watch it be "revealed".
+                // MysteryRevealRoutine writes the real symbol back once the door is covering it.
+                if (mysteryId >= 0 && mysteryCells.Contains(row * ReelCount + columnIndex))
+                {
+                    symbolId = mysteryId;
+                }
+
                 ApplySymbol(reel.displayImages[row], symbolId, manageRaycast: true);
             }
         }
@@ -655,6 +675,9 @@ public class SlotView : MonoBehaviour
         if (!isSpinning)
         {
             currentDisplayMatrix = resultMatrix;
+            // No reveal runs on this path, so no cell should be held back as a Mystery — and a
+            // stale set from a previous spin would draw one over an unrelated symbol.
+            mysteryCells.Clear();
             for (int col = 0; col < ReelCount; col++)
             {
                 SetReelSymbols(col, resultMatrix[col], false);
@@ -669,6 +692,17 @@ public class SlotView : MonoBehaviour
     private IEnumerator StopSpinSequence(List<List<int>> resultMatrix, System.Action onComplete, bool isQuickStop)
     {
         currentDisplayMatrix = resultMatrix;
+
+        // Captured before any reel lands, because the landing write needs it: these cells draw a
+        // Mystery rather than the symbol the matrix holds for them.
+        mysteryCells.Clear();
+        var landedMysteries = gameManager != null && gameManager.lastResult != null
+            ? gameManager.lastResult.mysteryPositions
+            : null;
+        if (landedMysteries != null)
+        {
+            foreach (int flatIndex in landedMysteries) mysteryCells.Add(flatIndex);
+        }
 
         // GameManager.GetSpinDuration() already enforces the minimum spin time before this is
         // ever called, so there's no need for a separate discrete-cycle-count gate here.
@@ -890,6 +924,8 @@ public class SlotView : MonoBehaviour
         if (!isSpinning)
         {
             currentDisplayMatrix = resultMatrix;
+            // Same reasoning as StopSpin's early-out: no reveal on this path, so no Mystery override.
+            mysteryCells.Clear();
             for (int col = 0; col < ReelCount; col++)
             {
                 if (col < reelTransforms.Length)
@@ -942,88 +978,6 @@ public class SlotView : MonoBehaviour
                 }
             }
         }
-    }
-
-    // Dormant CNY-era code (uSpinData is always null, never invoked — see GameDataModels).
-    internal void AnimateUSpinWin(System.Action onComplete = null)
-    {
-        if (currentDisplayMatrix == null)
-        {
-            onComplete?.Invoke();
-            return;
-        }
-
-        KillWinTweens();
-        AudioManager.Instance?.PlayWinLinePhase1Start();
-
-        List<ImageAnimation> activeUSpinAnims = new List<ImageAnimation>();
-        int completedCount = 0;
-        int targetLoops = 2; // Exactly 2 loops of full animation
-
-        for (int col = 0; col < ReelCount; col++)
-        {
-            if (col >= currentDisplayMatrix.Count) continue;
-            for (int row = 0; row < currentDisplayMatrix[col].Count; row++)
-            {
-                if (currentDisplayMatrix[col][row] == 11) // USpin Symbol ID
-                {
-                    int displayIndex = row;
-                    Image symbolImage = (col < reelImagesList.Count && reelImagesList[col].displayImages != null && displayIndex < reelImagesList[col].displayImages.Count)
-                        ? reelImagesList[col].displayImages[displayIndex]
-                        : null;
-                    if (symbolImage == null) continue;
-
-                    ImageAnimation imageAnim = symbolImage.GetComponent<ImageAnimation>();
-                    if (imageAnim != null)
-                    {
-                        activeUSpinAnims.Add(imageAnim);
-
-                        List<Sprite> animSprites = animationSpriteArrays[11];
-                        imageAnim.textureArray = animSprites;
-                        imageAnim.doLoopAnimation = true;
-
-                        // ImageAnimation lives directly on the SlotIcon root, sharing symbolImage —
-                        // no separate overlay to activate/fade; just ensure full opacity before playing.
-                        symbolImage.DOKill();
-                        Color c = symbolImage.color;
-                        symbolImage.color = new Color(c.r, c.g, c.b, 1f);
-
-                        imageAnim.onLoopComplete = (loopCount) =>
-                        {
-                            if (loopCount >= targetLoops)
-                            {
-                                imageAnim.onLoopComplete = null;
-                                imageAnim.StopAnimation();
-
-                                completedCount++;
-                                if (completedCount >= activeUSpinAnims.Count)
-                                {
-                                    onComplete?.Invoke();
-                                }
-                            }
-                        };
-
-                        imageAnim.StartAnimation();
-                    }
-                }
-            }
-        }
-
-        if (activeUSpinAnims.Count == 0)
-        {
-            onComplete?.Invoke();
-        }
-    }
-
-    // Dormant CNY-era code (moneyBagData is always null, never invoked — see GameDataModels).
-    // Body was stripped of its WinBox-driven symbol scan when WinBox was removed; only the
-    // tween-cleanup/audio-cue shell remains.
-    internal void AnimateMoneyBagWin()
-    {
-        if (currentDisplayMatrix == null) return;
-
-        KillWinTweens();
-        AudioManager.Instance?.PlayWinLinePhase1Start();
     }
 
     private void AnimateSymbolSingleLoop(int column, int row, int loopCount = 1)
@@ -1186,6 +1140,13 @@ public class SlotView : MonoBehaviour
         // Held so the win presentation's teardown can't drop the dim between the two beats.
         dimHeld = true;
 
+        // Order inside this frame matters. The layer is now up and every slot is sitting on frame 0
+        // — a closed door — so the reel icons underneath can be swapped from Mystery to what they
+        // actually revealed without any of it being seen. Do this before StartAnimation: the door
+        // opens ONTO the base layer, so the real symbol has to already be there when it does.
+        // Nothing renders until the end of the frame, so all of this lands at once.
+        WriteRevealedSymbolsUnderMystery(positions);
+
         foreach (var imageAnim in activeAnims)
         {
             imageAnim.StartAnimation();
@@ -1200,10 +1161,48 @@ public class SlotView : MonoBehaviour
             yield return new WaitForSeconds(winSymbolLoopDuration);
         }
 
-        // Uncovering the layer IS the reveal — the reel icons beneath are already correct.
+        // The door has finished opening; taking the layer down leaves the revealed symbols standing.
         HideMysterySlots();
 
+        // A beat between the reveal and the win presentation. Only spins that actually had a
+        // Mystery pay this — a spin with none returns immediately from PlayMysteryReveal and never
+        // reaches here.
+        if (mysteryToWinAnimationDelay > 0f)
+        {
+            yield return new WaitForSeconds(mysteryToWinAnimationDelay);
+        }
+
         onComplete?.Invoke();
+    }
+
+    // Puts the real symbols back into the reel icons while the closed doors are covering them.
+    // Reads currentDisplayMatrix, which has held the post-reveal symbols all along — only the
+    // icons were showing a Mystery, never the data.
+    private void WriteRevealedSymbolsUnderMystery(List<int> positions)
+    {
+        if (positions == null || currentDisplayMatrix == null) return;
+
+        int rowCount = RowCount;
+
+        foreach (int flatIndex in positions)
+        {
+            int row = flatIndex / ReelCount;
+            int col = flatIndex % ReelCount;
+
+            if (col < 0 || col >= ReelCount || row < 0 || row >= rowCount) continue;
+            if (col >= currentDisplayMatrix.Count || row >= currentDisplayMatrix[col].Count) continue;
+            if (reelImagesList == null || col >= reelImagesList.Count) continue;
+
+            var reel = reelImagesList[col];
+            if (reel == null || reel.displayImages == null || row >= reel.displayImages.Count) continue;
+            if (reel.displayImages[row] == null) continue;
+
+            ApplySymbol(reel.displayImages[row], currentDisplayMatrix[col][row], manageRaycast: true);
+        }
+
+        // The override has served its purpose: any later write this spin should use the real
+        // symbols, not put the Mystery back.
+        mysteryCells.Clear();
     }
 
     private void HideMysterySlots()
@@ -1326,12 +1325,10 @@ public class SlotView : MonoBehaviour
         // presentation takes the screen instead, and AnimateAllScatters does its own teardown.
         // A retrigger (spinsAwarded during a free spin) is deliberately not counted: the round is
         // already running and has no separate trigger sequence to make way for.
-        bool hasSpecialFeature = (gameManager != null && gameManager.lastResult != null && (
-            (gameManager.lastResult.uSpinData != null && gameManager.lastResult.uSpinData.triggered) ||
-            (gameManager.lastResult.moneyBagData != null && gameManager.lastResult.moneyBagData.triggered) ||
-            (gameManager.lastResult.freeGame != null && gameManager.lastResult.freeGame.spinsAwarded
-                && !gameManager.lastResult.freeGame.isFreeGame)
-        ));
+        bool hasSpecialFeature = gameManager != null && gameManager.lastResult != null
+            && gameManager.lastResult.freeGame != null
+            && gameManager.lastResult.freeGame.spinsAwarded
+            && !gameManager.lastResult.freeGame.isFreeGame;
 
         bool skipPhase2 = (gameManager != null && (gameManager.isInFreeSpins || gameManager.isAutoPlaying)) || hasSpecialFeature;
         if (skipPhase2)
@@ -1534,127 +1531,6 @@ public class SlotView : MonoBehaviour
         Sequence seq = DOTween.Sequence();
         seq.Append(textTransform.DOScale(popScale, durationUp).SetEase(Ease.OutQuad));
         seq.Append(textTransform.DOScale(1.0f, durationDown).SetEase(Ease.InQuad));
-        winTweens.Add(seq);
-    }
-    // Confirmed dead code — no callers anywhere in the project.
-    private void ResetSymbolScale(int col, int row)
-    {
-        if (col >= reelImagesList.Count) return;
-        var reel = reelImagesList[col];
-        if (reel.displayImages == null) return;
-        int displayIndex = row;
-        if (displayIndex >= reel.displayImages.Count) return;
-        if (reel.displayImages[displayIndex] == null) return;
-
-        Image symbolImage = reel.displayImages[displayIndex];
-        symbolImage.DOKill();
-        symbolImage.transform.localScale = Vector3.one;
-        // Restore alpha to full opacity
-        Color c = symbolImage.color;
-        symbolImage.color = new Color(c.r, c.g, c.b, 1f);
-
-        ImageAnimation imageAnim = symbolImage.GetComponent<ImageAnimation>();
-        if (imageAnim != null)
-        {
-            imageAnim.StopAnimation();
-        }
-    }
-
-
-    // Confirmed dead code — no callers anywhere in the project.
-    private void AnimateWinSymbol(int column, int row)
-    {
-
-        if (column >= reelImagesList.Count)
-        {
-            Debug.LogError($"[AnimateWinSymbol] Invalid column {column}, max is {reelImagesList.Count - 1}");
-            return;
-        }
-
-        var reel = reelImagesList[column];
-        if (reel.displayImages == null)
-        {
-            Debug.LogError($"[AnimateWinSymbol] Reel {column} has invalid displayImages list");
-            return;
-        }
-
-        int displayIndex = row;
-        if (displayIndex >= reel.displayImages.Count)
-        {
-            Debug.LogError($"[AnimateWinSymbol] Display index {displayIndex} out of range for reel {column}");
-            return;
-        }
-
-        Image symbolImage = reel.displayImages[displayIndex];
-        if (symbolImage == null)
-        {
-            Debug.LogError($"[AnimateWinSymbol] Symbol image is NULL at col: {column}, row: {row}, displayIndex: {displayIndex}");
-            return;
-        }
-
-
-
-        // Get the ImageAnimation component (lives directly on the SlotIcon root, sharing symbolImage)
-        ImageAnimation imageAnim = symbolImage.GetComponent<ImageAnimation>();
-        if (imageAnim == null)
-        {
-            Debug.LogError($"[AnimateWinSymbol] ImageAnimation component not found on animation object at col: {column}, row: {row}");
-            return;
-        }
-
-        // Get the current symbol ID at this position
-        if (column >= currentDisplayMatrix.Count || row >= currentDisplayMatrix[column].Count)
-        {
-            Debug.LogError($"[AnimateWinSymbol] Invalid matrix position col: {column}, row: {row}");
-            return;
-        }
-
-        int symbolId = currentDisplayMatrix[column][row];
-        
-        // Validate symbolId
-        if (symbolId < 0 || symbolId >= animationSpriteArrays.Length)
-        {
-            Debug.LogError($"[AnimateWinSymbol] Invalid symbolId {symbolId} at col: {column}, row: {row}");
-            return;
-        }
-
-        // Get the animation sprite array for this symbol
-        List<Sprite> animSprites = animationSpriteArrays[symbolId];
-        if (animSprites == null || animSprites.Count == 0)
-        {
-            // Expected for most symbols now
-            return;
-        }
-
-        // Set the sprite array on the ImageAnimation component
-        imageAnim.textureArray = animSprites;
-
-        Sequence seq = DOTween.Sequence();
-
-        seq.AppendCallback(() => {
-            // ImageAnimation lives directly on the SlotIcon root, sharing symbolImage —
-            // no separate overlay to activate/fade; just ensure full opacity before playing.
-            symbolImage.DOKill();
-            Color c = symbolImage.color;
-            symbolImage.color = new Color(c.r, c.g, c.b, 1f);
-        });
-
-        if (winLineBoxToAnimationDelay > 0)
-        {
-            seq.AppendInterval(winLineBoxToAnimationDelay);
-        }
-
-        seq.AppendCallback(() => {
-            imageAnim.StartAnimation();
-        });
-
-        int loopCount = (gameManager != null && (gameManager.isInFreeSpins || gameManager.isAutoPlaying)) ? 1 : winSymbolLoopCount;
-        seq.AppendInterval(winSymbolLoopDuration * loopCount);
-
-        seq.AppendCallback(() => {
-            if (imageAnim != null) imageAnim.StopAnimation(); // reverts to textureArray[0], which equals the resting sprite
-        });
-
         winTweens.Add(seq);
     }
 

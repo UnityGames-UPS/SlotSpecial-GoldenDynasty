@@ -298,25 +298,6 @@ public class SpinResult
     // space WinLine.positions uses. resultMatrix already holds what each one revealed into, so
     // these are positions only: draw a Mystery there, play the reveal, uncover what is beneath.
     public List<int> mysteryPositions;
-
-    // Dormant CNY-era holdovers — never populated. Queued for removal in TODO.md "Cleanup".
-    public USpinResultData uSpinData;
-    public MoneyBagResultData moneyBagData;
-
-    public double GetMoneyBagWin()
-    {
-        return (moneyBagData != null && moneyBagData.triggered) ? moneyBagData.winInCash : 0;
-    }
-
-    public double GetUSpinCashWin()
-    {
-        return (uSpinData != null && uSpinData.triggered && uSpinData.type == "MULTIPLIER") ? uSpinData.winInCash : 0;
-    }
-
-    public double GetTotalFeatureDeferredWins()
-    {
-        return GetMoneyBagWin() + GetUSpinCashWin();
-    }
 }
 
 [Serializable]
@@ -355,27 +336,6 @@ public class FreeGameData
     // The round's running total, server-authoritative. The old backend sent no aggregate and the
     // client had to accumulate, which drifted whenever a response was missed.
     public double roundWin;
-}
-
-[Serializable]
-public class USpinResultData
-{
-    public bool triggered;
-    public int sliceIndex;
-    public string type;
-    public double multiplierAwarded;
-    public int freeGamesAwarded;
-    public double winInCash;
-}
-
-[Serializable]
-public class MoneyBagResultData
-{
-    public bool triggered;
-    public int pickedIndex;
-    public List<int> revealed;
-    public int creditsAwarded;
-    public double winInCash;
 }
 
 #endregion
@@ -551,10 +511,7 @@ public static class InitDataConverter
             },
 
             freeGame = ConvertFreeGame(serverResponse?.features?.freeGame),
-            mysteryPositions = ConvertMysteryPositions(serverResponse?.cellMetadata, gameConfig),
-
-            uSpinData = null,
-            moneyBagData = null
+            mysteryPositions = ConvertMysteryPositions(serverResponse?.cellMetadata, gameConfig)
         };
     }
 

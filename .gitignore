@@ -108,5 +108,5 @@ InitTestScene*.unity*
 # Claude Code
 .claude/
 Assets/Scripts/.claude/
-# Local working notes — never tracked
-/TODO.md
+# Local working notes — never tracked.
+/Assets/Scripts/MD/
