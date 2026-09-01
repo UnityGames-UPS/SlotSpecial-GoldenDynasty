@@ -291,7 +291,12 @@ public class SocketIOManager : MonoBehaviour
             var initData = JsonConvert.DeserializeObject<InitData>(jsonData);
             var gameConfig = InitDataConverter.ConvertToGameConfig(initData);
             var playerData = InitDataConverter.ConvertToPlayerData(initData.player);
-            var initialMatrix = GenerateRandomMatrix(gameConfig.rowCount, gameConfig.reelCount, gameConfig.symbols != null ? gameConfig.symbols.Count : 0);
+            var initialMatrix = GenerateRandomMatrix(
+                gameConfig.rowCount,
+                gameConfig.reelCount,
+                gameConfig.symbols != null ? gameConfig.symbols.Count : 0,
+                gameConfig.orbSymbolId,
+                gameConfig.mysterySymbolId);
 
             isInitialized = true;
 
@@ -675,15 +680,30 @@ public class SocketIOManager : MonoBehaviour
     // used to build (which existed to space symbols out in Sizzling 7s' padded display block) would
     // just scatter Drums across the idle grid. Symbol count comes from the server's own table
     // rather than a literal, so it can't drift when the symbol set changes again.
-    private List<List<int>> GenerateRandomMatrix(int rowCount, int reelCount, int symbolCount)
+    //
+    // Orb and Mystery are excluded from this random pool. Both are only ever meant to appear when
+    // the backend actually places them there — an Orb always needs a real prize value attached, and
+    // Mystery has no meaning outside a reveal — so neither should turn up in a placeholder nobody
+    // asked for.
+    private List<List<int>> GenerateRandomMatrix(int rowCount, int reelCount, int symbolCount, int orbSymbolId, int mysterySymbolId)
     {
+        var allowedSymbolIds = new List<int>(symbolCount);
+        for (int id = 0; id < symbolCount; id++)
+        {
+            if (id == orbSymbolId || id == mysterySymbolId) continue;
+            allowedSymbolIds.Add(id);
+        }
+
         var matrix = new List<List<int>>();
         for (int col = 0; col < reelCount; col++)
         {
             var column = new List<int>();
             for (int row = 0; row < rowCount; row++)
             {
-                column.Add(symbolCount > 0 ? UnityEngine.Random.Range(0, symbolCount) : 0);
+                int symbolId = allowedSymbolIds.Count > 0
+                    ? allowedSymbolIds[UnityEngine.Random.Range(0, allowedSymbolIds.Count)]
+                    : 0;
+                column.Add(symbolId);
             }
             matrix.Add(column);
         }

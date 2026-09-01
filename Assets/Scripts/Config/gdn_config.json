@@ -372,7 +372,12 @@
       "id": 0,
       "name": "Wild",
       "type": "wild",
-      "multiplier": [],
+      "multiplier": [
+        250,
+        100,
+        25,
+        5
+      ],
       "useWildSub": false,
       "description": "Wild: Substitutes for all symbols except Scatter and Orb. Appears on reels 2, 3, 4 and 5 only.",
       "displayName": "Wild",
@@ -395,11 +400,11 @@
       "displayName": "Scatter",
       "isBonusSymbol": false,
       "reelsInstance": {
-        "0": 3,
-        "1": 3,
-        "2": 3,
-        "3": 3,
-        "4": 3
+        "0": 10,
+        "1": 10,
+        "2": 10,
+        "3": 10,
+        "4": 10
       },
       "isSpecialSymbol": true,
       "scatterMultiplier": [
@@ -441,11 +446,11 @@
       "displayName": "Mystery",
       "isBonusSymbol": false,
       "reelsInstance": {
-        "0": 0,
-        "1": 0,
-        "2": 0,
-        "3": 0,
-        "4": 0
+        "0": 10,
+        "1": 10,
+        "2": 10,
+        "3": 10,
+        "4": 10
       },
       "isSpecialSymbol": true
     },

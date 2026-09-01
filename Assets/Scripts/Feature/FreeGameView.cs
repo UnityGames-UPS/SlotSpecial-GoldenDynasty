@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using UnityEngine;
-using UnityEngine.UI;
 using DG.Tweening;
 
 /// <summary>
@@ -55,15 +54,6 @@ public class FreeGameView : MonoBehaviour
     [SerializeField] private CanvasGroup darkOverlayGroup;
     [SerializeField] private CanvasGroup fadeToBlackGroup;
 
-    [Header("Background Swap")]
-    [Tooltip("The SlotObject image — swapped for the whole feature, reverted on the closing fade.")]
-    [SerializeField] private Image slotObjectImage;
-    [SerializeField] private Sprite slotObjectNormalSprite;
-    [SerializeField] private Sprite slotObjectFreeGamesSprite;
-    [SerializeField] private Image reelBackgroundImage;
-    [SerializeField] private Sprite reelBackgroundNormalSprite;
-    [SerializeField] private Sprite reelBackgroundFreeGamesSprite;
-
     // Deliberately NOT [SerializeField]. These were serialized on the old view, which meant the
     // scene's saved values silently overrode any change made here — retuning in code appeared to do
     // nothing. Code is the single source of truth; the trade is that they need a recompile.
@@ -97,7 +87,6 @@ public class FreeGameView : MonoBehaviour
         if (!HasRequiredRefs()) return;
 
         StopActiveSequence();
-        SwapBackgrounds(true);
 
         SetGroupAlpha(freeGamesTextsGroup, 1f, true);
         if (freeGamesTexts != null) freeGamesTexts.SetActive(true);
@@ -183,8 +172,6 @@ public class FreeGameView : MonoBehaviour
 
         if (counterTween != null) { counterTween.Kill(); counterTween = null; }
         if (totalWinTween != null) { totalWinTween.Kill(); totalWinTween = null; }
-
-        SwapBackgrounds(false);
 
         ShowPanelState(prompt: false, remaining: false, completed: false);
         if (freeGamesTexts != null) freeGamesTexts.SetActive(false);
@@ -350,8 +337,6 @@ public class FreeGameView : MonoBehaviour
 
     private IEnumerator FadeOutRoundElements()
     {
-        SwapBackgrounds(false);
-
         Tween summaryOut = freeGamesOverGroup != null ? freeGamesOverGroup.DOFade(0f, overlayFadeDuration) : null;
         Tween counterOut = freeGamesTextsGroup != null ? freeGamesTextsGroup.DOFade(0f, overlayFadeDuration) : null;
         Tween overlayOut = darkOverlayGroup != null ? darkOverlayGroup.DOFade(0f, overlayFadeDuration) : null;
@@ -372,22 +357,6 @@ public class FreeGameView : MonoBehaviour
     #endregion
 
     #region Helpers
-
-    // Both images swap together in one place so they can never drift out of sync.
-    private void SwapBackgrounds(bool toFreeGames)
-    {
-        if (slotObjectImage != null)
-        {
-            Sprite target = toFreeGames ? slotObjectFreeGamesSprite : slotObjectNormalSprite;
-            if (target != null) slotObjectImage.sprite = target;
-        }
-
-        if (reelBackgroundImage != null)
-        {
-            Sprite target = toFreeGames ? reelBackgroundFreeGamesSprite : reelBackgroundNormalSprite;
-            if (target != null) reelBackgroundImage.sprite = target;
-        }
-    }
 
     private void SetGroupAlpha(CanvasGroup group, float alpha, bool active)
     {

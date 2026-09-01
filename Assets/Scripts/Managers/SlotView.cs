@@ -220,6 +220,13 @@ public class SlotView : MonoBehaviour
     // to stop, so the landing write knows to draw a Mystery there instead of the revealed symbol.
     private readonly HashSet<int> mysteryCells = new HashSet<int>();
 
+    // Ids the scroll buffer is allowed to pick from — every symbol except Orb and Mystery. Neither
+    // should ever appear unless the backend actually placed it there: an Orb always needs a real
+    // prize value attached, and Mystery has no meaning outside a reveal, so seeing either as random
+    // filler would be showing something the server never sent. Built once and cached, since
+    // gameConfig doesn't change after init and this is read on every buffer icon of every spin.
+    private List<int> fillerSymbolIds;
+
 
     internal List<List<int>> currentDisplayMatrix;
 
@@ -567,14 +574,34 @@ public class SlotView : MonoBehaviour
         var reel = reelImagesList[columnIndex];
         if (reel.images == null) return;
 
+        EnsureFillerSymbolIds();
+
         for (int i = 0; i < reel.images.Count; i++)
         {
-            // Held in a variable so ApplySymbol can size it — the range spans every symbol id,
-            // so a special that needs its own rect size resizes as it scrolls past just like a
-            // landed one. Currently unfiltered: Mystery only ever lands during Free Games, so
-            // showing it in base-game filler may need excluding once the feature is built.
-            int symbolId = Random.Range(0, SymbolCount);
+            // Held in a variable so ApplySymbol can size it — the pool spans every non-excluded
+            // symbol id, so a special that needs its own rect size resizes as it scrolls past just
+            // like a landed one.
+            int symbolId = fillerSymbolIds.Count > 0
+                ? fillerSymbolIds[Random.Range(0, fillerSymbolIds.Count)]
+                : 0;
             ApplySymbol(reel.images[i], symbolId);
+        }
+    }
+
+    // Builds the filler pool once and reuses it — gameConfig is fixed for the session, and this is
+    // read on every buffer icon of every spin.
+    private void EnsureFillerSymbolIds()
+    {
+        if (fillerSymbolIds != null) return;
+
+        int orbSymbolId = (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.orbSymbolId : -1;
+        int mysterySymbolId = (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.mysterySymbolId : -1;
+
+        fillerSymbolIds = new List<int>(SymbolCount);
+        for (int id = 0; id < SymbolCount; id++)
+        {
+            if (id == orbSymbolId || id == mysterySymbolId) continue;
+            fillerSymbolIds.Add(id);
         }
     }
 
