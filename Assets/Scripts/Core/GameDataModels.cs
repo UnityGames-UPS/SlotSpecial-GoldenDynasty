@@ -132,10 +132,10 @@ public class ServerSpinResponse
     // "mystery_Mystery") and are deliberately never parsed — see ConvertMysteryPositions.
     public Dictionary<string, string> cellMetadata;
 
-    // Still deliberately unbound until their populated shape is known: "payload.orbPrizeMap"
-    // (always {}) and "features.holdAndSpin.heldPositions" (always []). Newtonsoft ignores
-    // undeclared fields, so omitting them costs nothing, whereas guessing a type wrong throws and
-    // loses the whole spin.
+    // "features.holdAndSpin.heldPositions" stays deliberately unbound. It is populated now, but it
+    // describes exactly the cells payload.orbPrizeMap already covers during a round, and it is one
+    // of the two fields that persist stale after a round ends. Binding it would only invite someone
+    // to read it. Newtonsoft ignores undeclared fields, so leaving it out costs nothing.
 }
 
 [Serializable]
@@ -160,6 +160,17 @@ public class ServerPayload
     // currentWinning. Never add it — that would double-count the scatter on every spin one pays.
     public double scatterWin;
     public int scatterCount;
+
+    // Every Orb on the board, keyed "row:col" in the same row-major space as matrix and
+    // cellMetadata. Present on every spin, base game included — an Orb always carries a prize.
+    // Values are already multiplied out to cash; the client displays them as sent and never
+    // divides back to the info page's tier. See HoldAndSpin.md section 1.
+    //
+    // This is the ONLY field the client reads for Orb state. features.holdAndSpin's orbCount and
+    // heldPositions describe the same cells during a round but both persist stale after one ends,
+    // and newOrbCount reports 0 on the triggering spin even though every Orb there is new. This map
+    // has been correct on every captured response, including the spins where those were not.
+    public Dictionary<string, double> orbPrizeMap;
 }
 
 [Serializable]
@@ -298,6 +309,10 @@ public class SpinResult
     // space WinLine.positions uses. resultMatrix already holds what each one revealed into, so
     // these are positions only: draw a Mystery there, play the reveal, uncover what is beneath.
     public List<int> mysteryPositions;
+
+    // Always present — the server sends the hold-and-spin block on every spin, in or out of a
+    // round, and orbPrizes is populated whenever any Orb is on the board.
+    public HoldAndSpinData holdAndSpin;
 }
 
 [Serializable]
@@ -336,6 +351,41 @@ public class FreeGameData
     // The round's running total, server-authoritative. The old backend sent no aggregate and the
     // client had to accumulate, which drifted whenever a response was missed.
     public double roundWin;
+}
+
+/// <summary>
+/// The hold-and-spin facts for one spin. Deliberately narrower than the wire block: orbCount,
+/// newOrbCount and heldPositions are all dropped, because orbPrizes carries the same information
+/// and is the only one of the four that has never been observed wrong. See HoldAndSpin.md
+/// section 8, "orbPrizeMap is the client's only source for Orb state".
+/// </summary>
+[Serializable]
+public class HoldAndSpinData
+{
+    // True for the whole round INCLUDING the triggering spin, false on the payout spin.
+    //
+    // This is the single start/end signal. Do not end a round on spinsRemaining reaching zero:
+    // captured rounds that ended by filling the board reported 3 and 2 remaining, because a newly
+    // landed Orb had just reset the counter on the same spin that closed the round.
+    public bool active;
+
+    // True only on the spin that starts a round — the intro cue. That spin is an ordinary paid
+    // base spin; every spin after it is free.
+    public bool triggered;
+
+    // Spins left after this one, reset to 3 whenever an Orb lands. Display only.
+    public int spinsRemaining;
+
+    // totalOrbPayout: 0 for the whole round, then the final sum on the payout spin. Informational
+    // ONLY — do not display it. The money arrives through currentWinning like every other win, and
+    // only that figure is rounded: one captured payout read 12.100000000000001 here against a clean
+    // 12.1 in currentWinning, which is also what the balance moved by.
+    public double roundWin;
+
+    // Every Orb on the board, flat index (row * reelCount + col) -> cash prize. Populated on every
+    // spin an Orb is present, in or out of a round. Prizes are assigned when an Orb lands and are
+    // then frozen for the rest of the round, so a cell already drawn never needs rewriting.
+    public Dictionary<int, double> orbPrizes;
 }
 
 #endregion
@@ -511,7 +561,8 @@ public static class InitDataConverter
             },
 
             freeGame = ConvertFreeGame(serverResponse?.features?.freeGame),
-            mysteryPositions = ConvertMysteryPositions(serverResponse?.cellMetadata, gameConfig)
+            mysteryPositions = ConvertMysteryPositions(serverResponse?.cellMetadata, gameConfig),
+            holdAndSpin = ConvertHoldAndSpin(serverResponse?.features?.holdAndSpin, serverResponse?.payload?.orbPrizeMap, gameConfig)
         };
     }
 
@@ -547,38 +598,94 @@ public static class InitDataConverter
         var positions = new List<int>();
         if (cellMetadata == null || cellMetadata.Count == 0) return positions;
 
-        int reelCount = gameConfig != null ? gameConfig.reelCount : 5;
-        int rowCount = gameConfig != null ? gameConfig.rowCount : 3;
-
         foreach (var entry in cellMetadata)
         {
-            string key = entry.Key;
-            if (string.IsNullOrEmpty(key)) continue;
-
-            int separator = key.IndexOf(':');
-            if (separator <= 0 || separator >= key.Length - 1)
+            if (TryParseCellKey(entry.Key, gameConfig, "cellMetadata", out int flatIndex))
             {
-                UnityEngine.Debug.LogError($"[InitDataConverter] cellMetadata key '{key}' is not in the expected row:col form — cell skipped.");
-                continue;
+                positions.Add(flatIndex);
             }
-
-            if (!int.TryParse(key.Substring(0, separator), out int row)
-                || !int.TryParse(key.Substring(separator + 1), out int col))
-            {
-                UnityEngine.Debug.LogError($"[InitDataConverter] Could not read row/col out of cellMetadata key '{key}' — cell skipped.");
-                continue;
-            }
-
-            if (row < 0 || row >= rowCount || col < 0 || col >= reelCount)
-            {
-                UnityEngine.Debug.LogError($"[InitDataConverter] cellMetadata key '{key}' is outside the {rowCount}x{reelCount} grid — cell skipped.");
-                continue;
-            }
-
-            positions.Add(row * reelCount + col);
         }
 
         return positions;
+    }
+
+    /// <summary>
+    /// Turns payload.orbPrizeMap into flat cell index -> cash prize, and folds in the round state.
+    ///
+    /// Deliberately ignores features.holdAndSpin's orbCount, newOrbCount and heldPositions. The
+    /// prize map's key set is the same cell set during a round, and it is the only one of the four
+    /// that has never been observed stale — orbCount and heldPositions both survive a round's end,
+    /// and newOrbCount is 0 on the triggering spin despite every Orb there being new. Working from
+    /// the map and diffing against what is already drawn makes all three traps unreachable.
+    /// </summary>
+    private static HoldAndSpinData ConvertHoldAndSpin(ServerHoldAndSpinResult serverHoldAndSpin, Dictionary<string, double> orbPrizeMap, GameConfig gameConfig)
+    {
+        var data = new HoldAndSpinData
+        {
+            orbPrizes = new Dictionary<int, double>()
+        };
+
+        if (serverHoldAndSpin != null)
+        {
+            data.active = serverHoldAndSpin.active;
+            data.triggered = serverHoldAndSpin.triggered;
+            data.spinsRemaining = serverHoldAndSpin.spinsRemaining;
+            data.roundWin = serverHoldAndSpin.totalOrbPayout;
+        }
+
+        if (orbPrizeMap != null)
+        {
+            foreach (var entry in orbPrizeMap)
+            {
+                if (TryParseCellKey(entry.Key, gameConfig, "orbPrizeMap", out int flatIndex))
+                {
+                    data.orbPrizes[flatIndex] = entry.Value;
+                }
+            }
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// Reads a "row:col" cell key into a flat index (row * reelCount + col) — the same space
+    /// WinLine.positions uses. Shared by every per-cell map the server sends, which all use this
+    /// key format in the server's row-major space. Confirmed against live data: a key of "1:4"
+    /// only lands in range read that way on a 3-row matrix.
+    ///
+    /// Returns false and logs for anything malformed or out of range, so one bad cell is skipped
+    /// rather than costing the whole spin.
+    /// </summary>
+    private static bool TryParseCellKey(string key, GameConfig gameConfig, string source, out int flatIndex)
+    {
+        flatIndex = -1;
+        if (string.IsNullOrEmpty(key)) return false;
+
+        int reelCount = gameConfig != null ? gameConfig.reelCount : 5;
+        int rowCount = gameConfig != null ? gameConfig.rowCount : 3;
+
+        int separator = key.IndexOf(':');
+        if (separator <= 0 || separator >= key.Length - 1)
+        {
+            UnityEngine.Debug.LogError($"[InitDataConverter] {source} key '{key}' is not in the expected row:col form — cell skipped.");
+            return false;
+        }
+
+        if (!int.TryParse(key.Substring(0, separator), out int row)
+            || !int.TryParse(key.Substring(separator + 1), out int col))
+        {
+            UnityEngine.Debug.LogError($"[InitDataConverter] Could not read row/col out of {source} key '{key}' — cell skipped.");
+            return false;
+        }
+
+        if (row < 0 || row >= rowCount || col < 0 || col >= reelCount)
+        {
+            UnityEngine.Debug.LogError($"[InitDataConverter] {source} key '{key}' is outside the {rowCount}x{reelCount} grid — cell skipped.");
+            return false;
+        }
+
+        flatIndex = row * reelCount + col;
+        return true;
     }
 
     // Server matrix is row-major (matrix[row][col]); the client works column-major ([reel][row]),

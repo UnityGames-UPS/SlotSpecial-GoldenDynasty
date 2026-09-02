@@ -30,16 +30,22 @@ public class SlotView : MonoBehaviour
     [SerializeField] private Sprite spriteJ;                  // ID: 11 (low — "Jack")
     [SerializeField] private Sprite sprite10;                 // ID: 12 (low — "Ten")
 
-    // Symbols drawn at 1.5x, which take largeSymbolSize instead of normalSymbolSize.
+    // Rect size for symbols whose art is drawn at 1.5x against the 175 pitch.
+    private static readonly Vector2 LargeSymbolSize = new Vector2(262.5f, 262.5f);
+
+    // Symbols that need a rect size other than normalSymbolSize, each with its own. Was a flat set
+    // of "large" ids against a single size, until Wild and Lady each turned out to want something
+    // between 175 and 262.5 — sizing is per-symbol art, not a two-tier property.
+    //
     // Kept next to the sprite fields on purpose: both are id-keyed maps of the same symbol table,
     // so if the backend ever reorders it again they have to be corrected together — and the sprite
     // mapping fails loudly (every symbol showing the wrong art) the moment that happens.
-    private static readonly HashSet<int> LargeSymbolIds = new HashSet<int>
+    private static readonly Dictionary<int, Vector2> SymbolSizeOverrides = new Dictionary<int, Vector2>
     {
-        0, // Wild
-        4,  // Warriors
-        5,  // Lady
-        7   // Drum
+        { 0, new Vector2(200f, 200f) },  // Wild
+        { 4, LargeSymbolSize },          // Warriors
+        { 5, new Vector2(210f, 210f) },  // Lady
+        { 7, LargeSymbolSize }           // Drum
     };
 
     // Playback speed per symbol, applied wherever that symbol's clip is assigned.
@@ -107,13 +113,8 @@ public class SlotView : MonoBehaviour
     // here, so retuning in code appeared to do nothing. Code is the single source of truth now. The
     // trade is that they can no longer be nudged in Play mode — each change is a recompile.
 
-    // Rect size used by every symbol except those in LargeSymbolIds.
+    // Rect size used by every symbol not listed in SymbolSizeOverrides.
     private Vector2 normalSymbolSize = new Vector2(175f, 175f);
-    // Rect size for symbols whose art is drawn at 1.5x. Applied on reel icons and win-layer slots
-    // alike. Note these stand 262.5 tall against a 175 pitch, so they overlap their vertical
-    // neighbours by ~44px each side — intentional art bleed, but it also means they swallow clicks
-    // aimed at the symbols above and below them.
-    private Vector2 largeSymbolSize = new Vector2(262.5f, 262.5f);
 
     // Must match the actual icon pitch in the scene. Drives the spin loop's travel distance, which
     // has to be a whole number of pitches or the loop's wrap-around is visible.
@@ -188,6 +189,12 @@ public class SlotView : MonoBehaviour
     [Tooltip("Beat between the Mystery layer coming down and the win animations starting. Only spins that had a Mystery pay this. Distinct from winLineBoxToAnimationDelay, which sits INSIDE the win presentation, between raising its layer and starting its clips.")]
     [SerializeField] private float mysteryToWinAnimationDelay = 0.1f;
 
+    [Header("Orb Layer")]
+    [Tooltip("Root of the layer that draws Orbs with their prize values. Sits ABOVE the win dim (Orbs stay bright) and BELOW the Mystery layer (a closed door hides the Orb until it opens). Used by the base game and by Hold & Spin — the geometry is identical, so one layer serves both.")]
+    [SerializeField] private GameObject orbLayerRoot;
+    [Tooltip("One entry per reel column, each holding the 3 row slots top to bottom. Same shape as the win and Mystery layers.")]
+    [SerializeField] private List<OrbSlotColumn> orbSlotColumns = new List<OrbSlotColumn>(5);
+
     [Header("Phase 1 Total Win Presentation")]
     [SerializeField] private TMPro.TMP_Text phase1TotalWinText;
 
@@ -235,7 +242,7 @@ public class SlotView : MonoBehaviour
     // Config-driven, not Inspector-array-length-driven: reelTransforms/reelImagesList may still
     // have leftover unused slots from a previous reel count (e.g. CNY's 5 reels), so this must
     // reflect the real backend's reel count, not the serialized array size.
-    private int ReelCount => (gameManager != null && gameManager.gameConfig != null)
+    internal int ReelCount => (gameManager != null && gameManager.gameConfig != null)
         ? gameManager.gameConfig.reelCount
         : (reelTransforms != null ? reelTransforms.Length : 3);
 
@@ -243,7 +250,7 @@ public class SlotView : MonoBehaviour
     // in this game, so a row index means the same thing in the server payload, in
     // currentDisplayMatrix, and in each reel's displayImages list. The Sizzling-era
     // totalResponseRowCount / ActiveRowStart pair that translated between those spaces is gone.
-    private int RowCount => (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.rowCount : 3;
+    internal int RowCount => (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.rowCount : 3;
 
     #region Initialization
 
@@ -270,6 +277,10 @@ public class SlotView : MonoBehaviour
         HideWinSlots();
         HideMysterySlots();
         HideAllWinLines();
+        // Safe to clear here despite Hold & Spin's Orbs needing to survive a whole round: the only
+        // callers are Start and StartSpin, and StartSpin drives the column reels, which do not run
+        // during a round. The cells spin instead and the Orb layer is left standing.
+        ClearOrbLayer();
         // Release rather than Hide: this is the full teardown, so a Mystery reveal's claim on the
         // dim must not survive it.
         ReleaseHeldDim();
@@ -543,10 +554,16 @@ public class SlotView : MonoBehaviour
 
         image.sprite = GetSymbolSprite(symbolId);
 
-        // Sizing is art-driven, not role-driven: five symbols are drawn at 1.5x and the rest are
-        // not, which is why this reads a set of ids rather than keying off scatterSymbolId the way
-        // it did when exactly one symbol needed its own size.
-        image.rectTransform.sizeDelta = LargeSymbolIds.Contains(symbolId) ? largeSymbolSize : normalSymbolSize;
+        // Sizing is art-driven, not role-driven: a few symbols are drawn larger than the pitch and
+        // the rest are not, which is why this reads an id-keyed map rather than keying off
+        // scatterSymbolId the way it did when exactly one symbol needed its own size.
+        //
+        // Anything above 175 overlaps its vertical neighbours — 262.5 stands ~44px into each — which
+        // is intentional art bleed, but also means those symbols swallow clicks aimed at the ones
+        // above and below them.
+        image.rectTransform.sizeDelta = SymbolSizeOverrides.TryGetValue(symbolId, out Vector2 size)
+            ? size
+            : normalSymbolSize;
 
         // Display icons must catch clicks so the symbol info card can open on them. This is set
         // here rather than left to the scene so it can't be lost by an icon being re-authored.
@@ -709,6 +726,8 @@ public class SlotView : MonoBehaviour
             {
                 SetReelSymbols(col, resultMatrix[col], false);
             }
+            // No reel landed, so the per-column draw in StopSingleReel never ran.
+            ApplyOrbLayer(gameManager?.lastResult?.holdAndSpin?.orbPrizes);
             onComplete?.Invoke();
             return;
         }
@@ -862,6 +881,12 @@ public class SlotView : MonoBehaviour
 
         SetReelSymbols(columnIndex, targetSymbols, false);
 
+        // Orbs on this reel light up the moment it lands, without waiting for the reels to its
+        // right — an Orb always carries a prize and always animates immediately, in the base game
+        // as much as in the feature. Drawn per column here for exactly that reason; doing it once
+        // at the end of the stop sequence would make every Orb wait for the slowest reel.
+        DrawOrbsForColumn(columnIndex);
+
         // Snap to a fixed pre-land reference point so the overshoot/settle distance below is
         // consistent regardless of where in its continuous loop the reel was stopped.
         slotTransform.localPosition = new Vector3(
@@ -965,7 +990,10 @@ public class SlotView : MonoBehaviour
                     );
                 }
             }
-            
+
+            // No reel landed, so the per-column draw in StopSingleReel never ran.
+            ApplyOrbLayer(gameManager?.lastResult?.holdAndSpin?.orbPrizes);
+
             onComplete?.Invoke();
             return;
         }
@@ -1264,6 +1292,196 @@ public class SlotView : MonoBehaviour
 
     #endregion
 
+    #region Orb Layer
+
+    // Draws every Orb on the board, replacing whatever was there before. This is the BASE GAME
+    // path: each spin is a fresh board, so the layer is rebuilt from scratch and an Orb landing
+    // where one already was still animates as a new landing.
+    //
+    // Hold & Spin must NOT use this. Inside a round the layer is additive — see HoldOrb.
+    internal void ApplyOrbLayer(Dictionary<int, double> orbPrizes)
+    {
+        ClearOrbLayer();
+        if (orbPrizes == null || orbPrizes.Count == 0) return;
+
+        if (orbLayerRoot != null) orbLayerRoot.SetActive(true);
+
+        foreach (var entry in orbPrizes)
+        {
+            WriteOrbSlot(entry.Key, entry.Value);
+        }
+    }
+
+    // The base game's per-reel path, called as each column lands. Reads the spin's prize map the
+    // same way the Mystery override reads its positions — straight off the controller's result,
+    // rather than threading another argument through the whole stop sequence.
+    //
+    // Only runs outside a round: during Hold & Spin the column reels never stop, because they never
+    // started, and held Orbs are drawn one at a time by the feature view instead.
+    private void DrawOrbsForColumn(int columnIndex)
+    {
+        var orbPrizes = gameManager?.lastResult?.holdAndSpin?.orbPrizes;
+        if (orbPrizes == null || orbPrizes.Count == 0) return;
+
+        if (orbLayerRoot != null) orbLayerRoot.SetActive(true);
+
+        int reelCount = ReelCount;
+        for (int row = 0; row < RowCount; row++)
+        {
+            int flatIndex = row * reelCount + columnIndex;
+            if (orbPrizes.TryGetValue(flatIndex, out double prize))
+            {
+                WriteOrbSlot(flatIndex, prize);
+            }
+        }
+    }
+
+    // Draws one Orb and leaves every other slot alone. This is the HOLD & SPIN path: an Orb is
+    // written once when it lands and then never touched again until the round is taken, which is
+    // what keeps held Orbs from restarting their animations on every respin. An untouched slot
+    // cannot restart — the guarantee is structural rather than something to remember.
+    internal void HoldOrb(int flatIndex, double prize)
+    {
+        if (orbLayerRoot != null) orbLayerRoot.SetActive(true);
+        WriteOrbSlot(flatIndex, prize);
+    }
+
+    internal void ClearOrbLayer()
+    {
+        if (orbSlotColumns != null)
+        {
+            foreach (var column in orbSlotColumns)
+            {
+                if (column?.rows == null) continue;
+
+                foreach (var slot in column.rows)
+                {
+                    if (slot == null) continue;
+
+                    if (slot.animation != null)
+                    {
+                        slot.animation.StopAnimation();
+                        slot.animation.onLoopComplete = null;
+                    }
+
+                    if (slot.prizeText != null) slot.prizeText.gameObject.SetActive(false);
+
+                    if (slot.image != null)
+                    {
+                        slot.image.DOKill();
+                        slot.image.transform.localScale = Vector3.one;
+                        slot.image.gameObject.SetActive(false);
+                    }
+                }
+            }
+        }
+
+        if (orbLayerRoot != null) orbLayerRoot.SetActive(false);
+    }
+
+    // Writes an Orb sprite, its prize and its looping animation into one slot.
+    //
+    // The prize is shown exactly as the server sent it — already multiplied out to cash. Never
+    // divide back to the info page's 250/200/100 tiers: that would be client-side arithmetic on a
+    // server-authoritative figure, and the paytable-in-multipliers / display-in-currency split is
+    // how the rest of the game already reads.
+    private void WriteOrbSlot(int flatIndex, double prize)
+    {
+        OrbSlot slot = ResolveOrbSlot(flatIndex);
+        if (slot?.image == null) return;
+
+        int orbId = gameManager?.gameConfig != null ? gameManager.gameConfig.orbSymbolId : -1;
+        if (orbId < 0) return;
+
+        Image slotImage = slot.image;
+        slotImage.DOKill();
+        ApplySymbol(slotImage, orbId);
+        slotImage.transform.localScale = Vector3.one;
+        Color c = slotImage.color;
+        slotImage.color = new Color(c.r, c.g, c.b, 1f);
+        slotImage.gameObject.SetActive(true);
+
+        if (slot.prizeText != null)
+        {
+            slot.prizeText.text = prize.ToString("F2");
+            slot.prizeText.gameObject.SetActive(true);
+        }
+
+        ImageAnimation imageAnim = slot.animation;
+        if (imageAnim == null) return;
+
+        List<Sprite> frames = (animationSpriteArrays != null && orbId < animationSpriteArrays.Length)
+            ? animationSpriteArrays[orbId]
+            : null;
+
+        if (frames == null || frames.Count == 0) return;
+
+        imageAnim.textureArray = frames;
+        imageAnim.doLoopAnimation = true;
+        imageAnim.onLoopComplete = null;
+
+        // Written on every call, never assumed. AnimationSpeed is only read inside StartAnimation,
+        // and these components are reused across spins, so an unwritten speed is a stale speed
+        // inherited from whichever symbol used this slot last.
+        imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(orbId);
+        imageAnim.StartAnimation();
+    }
+
+    private OrbSlot ResolveOrbSlot(int flatIndex)
+    {
+        if (orbSlotColumns == null || ReelCount <= 0) return null;
+
+        int row = flatIndex / ReelCount;
+        int col = flatIndex % ReelCount;
+
+        if (col < 0 || col >= ReelCount || row < 0 || row >= RowCount) return null;
+        if (col >= orbSlotColumns.Count) return null;
+
+        var column = orbSlotColumns[col];
+        if (column?.rows == null || row >= column.rows.Count) return null;
+
+        return column.rows[row];
+    }
+
+    // Hold & Spin replaces the board in place: its 15 cell reels occupy the same positions, so the
+    // column reels have to get out of the way. Everything else — SlotShed, Orb layer, backgrounds —
+    // stays exactly where it is.
+    internal void SetColumnReelsVisible(bool visible)
+    {
+        if (reelTransforms == null) return;
+
+        for (int i = 0; i < reelTransforms.Length; i++)
+        {
+            if (reelTransforms[i] != null) reelTransforms[i].gameObject.SetActive(visible);
+        }
+    }
+
+    // Lets the Hold & Spin cells fill their strips with correctly sized symbols. ApplySymbol is
+    // private and does more than assign a sprite — the four oversized symbols need their own rect
+    // size — so exposing it beats every caller re-deriving that.
+    internal void WriteSymbol(Image image, int symbolId)
+    {
+        ApplySymbol(image, symbolId);
+    }
+
+    // The ids a Hold & Spin cell may scroll through: the base filler pool plus Orb. Orbs are what
+    // the player is spinning for, so seeing them sweep past is part of the tension — unlike the
+    // base game, where an Orb in the buffer would be showing a prize-less Orb the server never
+    // sent. Mystery stays excluded for that same reason: it has no meaning outside a reveal.
+    internal List<int> GetHoldAndSpinFillerIds()
+    {
+        EnsureFillerSymbolIds();
+
+        var ids = new List<int>(fillerSymbolIds);
+
+        int orbId = gameManager?.gameConfig != null ? gameManager.gameConfig.orbSymbolId : -1;
+        if (orbId >= 0 && !ids.Contains(orbId)) ids.Add(orbId);
+
+        return ids;
+    }
+
+    #endregion
+
     #region Win Line Animation
 
     internal void ShowWinLineAnimation(List<WinLine> winLines, System.Action onComplete)
@@ -1352,12 +1570,21 @@ public class SlotView : MonoBehaviour
         // presentation takes the screen instead, and AnimateAllScatters does its own teardown.
         // A retrigger (spinsAwarded during a free spin) is deliberately not counted: the round is
         // already running and has no separate trigger sequence to make way for.
-        bool hasSpecialFeature = gameManager != null && gameManager.lastResult != null
+        bool freeGamesTriggered = gameManager != null && gameManager.lastResult != null
             && gameManager.lastResult.freeGame != null
             && gameManager.lastResult.freeGame.spinsAwarded
             && !gameManager.lastResult.freeGame.isFreeGame;
 
-        bool skipPhase2 = (gameManager != null && (gameManager.isInFreeSpins || gameManager.isAutoPlaying)) || hasSpecialFeature;
+        // A Hold & Spin trigger takes the screen the same way, and for the same reason: the round's
+        // intro starts as soon as this call's onComplete unwinds, so leaving Phase 2 to run would
+        // cycle win lines underneath the feature for the next twenty seconds.
+        bool holdAndSpinTriggered = gameManager != null && gameManager.lastResult != null
+            && gameManager.lastResult.holdAndSpin != null
+            && gameManager.lastResult.holdAndSpin.triggered;
+
+        bool hasSpecialFeature = freeGamesTriggered || holdAndSpinTriggered;
+
+        bool skipPhase2 = (gameManager != null && (gameManager.isInFreeSpins || gameManager.isInHoldAndSpin || gameManager.isAutoPlaying)) || hasSpecialFeature;
         if (skipPhase2)
         {
             // Take the presentation down on the way out. Mid-round this is invisible — the next
@@ -1367,7 +1594,12 @@ public class SlotView : MonoBehaviour
             // round is genuinely over; a special-feature spin is left alone, since AnimateAllScatters
             // does its own KillWinTweens.
             winAnimationCoroutine = null;
-            if (!hasSpecialFeature)
+
+            // Only a Free Games trigger is left alone, because AnimateAllScatters immediately does
+            // its own KillWinTweens. Hold & Spin has no equivalent — its trigger sequence never
+            // touches the win layer — so the dim would sit over the whole feature if this were
+            // skipped for it too.
+            if (!freeGamesTriggered)
             {
                 // Presentation is genuinely over here, so any dim the Mystery reveal was holding
                 // is released before the teardown rather than surviving it.
@@ -1837,6 +2069,24 @@ public class AnimSlot
 public class AnimSlotColumn
 {
     public List<AnimSlot> rows = new List<AnimSlot>(3);   // index 0 = top active row
+}
+
+// One Orb-layer cell. Like AnimSlot but with the prize text, which is the whole reason this layer
+// exists — no other surface in the game can draw a number on a symbol. ApplySymbol writes a sprite
+// and a size and nothing else.
+[System.Serializable]
+public class OrbSlot
+{
+    public Image image;
+    public ImageAnimation animation;
+    public TMPro.TMP_Text prizeText;
+}
+
+// One reel column's worth of Orb slots — 3 rows, matching the grid, same shape as AnimSlotColumn.
+[System.Serializable]
+public class OrbSlotColumn
+{
+    public List<OrbSlot> rows = new List<OrbSlot>(3);     // index 0 = top active row
 }
 
 [System.Serializable]

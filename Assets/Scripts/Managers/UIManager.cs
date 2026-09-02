@@ -13,6 +13,7 @@ public class UIManager : MonoBehaviour
     [SerializeField] private PopupManager popupManager;
     [SerializeField] private JSFunctCalls jsFunctCalls;
     [SerializeField] private FreeGameView freeGameView;
+    [SerializeField] private HoldAndSpinView holdAndSpinView;
 
     [Header("Loading & Intro")]
     [SerializeField] private GameObject gameScreen;
@@ -507,7 +508,10 @@ public class UIManager : MonoBehaviour
     {
         AudioManager.Instance?.PlaySpinStart();
 
-        if (gameManager.isInFreeSpins)
+        // Both feature rounds hold the button in an explicit mode, so this only decides the
+        // interactable flag. It must stay false through a round: Hold & Spin in particular would
+        // otherwise re-enable its own Start button on every respin.
+        if (gameManager.isInFreeSpins || gameManager.isInHoldAndSpin)
         {
             SetSpinStopButtonStates(isSpinningState: true, isInteractable: false);
         }
@@ -553,21 +557,31 @@ public class UIManager : MonoBehaviour
         UpdateBalanceDisplay();
         if (result != null)
         {
-            // In free games the win box shows the round's running total, which GameManager
-            // accumulates — the server sends only this spin's win.
-            double displayWin = (gameManager != null && gameManager.isInFreeSpins) ? gameManager.freeSpinsRoundWin : result.winAmount;
-            UpdateWinDisplay(displayWin);
+            UpdateWinDisplay(GetDisplayWin(result));
         }
+    }
+
+    /// <summary>
+    /// What the win box should read for this spin.
+    ///
+    /// Free games show the round's running total, which GameManager accumulates — the server sends
+    /// only this spin's win. Hold & Spin shows nothing at all: the box holds "GOOD LUCK" for the
+    /// whole round and the Winner panel owns the total. That has to survive the payout spin too,
+    /// which arrives carrying the full round win in winAmount — writing it here would flash the
+    /// figure in the corner a moment before the panel counts it up properly.
+    /// </summary>
+    private double GetDisplayWin(SpinResult result)
+    {
+        if (gameManager == null) return result.winAmount;
+        if (gameManager.isInHoldAndSpin) return 0;
+        return gameManager.isInFreeSpins ? gameManager.freeSpinsRoundWin : result.winAmount;
     }
 
     internal void OnSpinCompleted(SpinResult result = null)
     {
         if (result != null)
         {
-            // In free games the win box shows the round's running total, which GameManager
-            // accumulates — the server sends only this spin's win.
-            double displayWin = (gameManager != null && gameManager.isInFreeSpins) ? gameManager.freeSpinsRoundWin : result.winAmount;
-            UpdateWinDisplay(displayWin);
+            UpdateWinDisplay(GetDisplayWin(result));
         }
         UpdateBalanceDisplay();
 
@@ -575,7 +589,7 @@ public class UIManager : MonoBehaviour
         {
             SetSpinStopButtonStates(isSpinningState: true, isInteractable: true);
         }
-        else if (gameManager.isInFreeSpins)
+        else if (gameManager.isInFreeSpins || gameManager.isInHoldAndSpin)
         {
             SetSpinStopButtonStates(isSpinningState: true, isInteractable: false);
         }
@@ -642,6 +656,18 @@ public class UIManager : MonoBehaviour
                 AudioManager.Instance?.PlayTakeButton();
                 SetSpinButtonMode(SpinButtonMode.FreeGamesTake, interactable: false);
                 if (freeGameView != null) freeGameView.OnTakePressed();
+                return;
+
+            case SpinButtonMode.HoldAndSpinStart:
+                AudioManager.Instance?.PlayButton();
+                SetSpinButtonMode(SpinButtonMode.HoldAndSpinStart, interactable: false);
+                gameManager.StartFirstHoldSpin();
+                return;
+
+            case SpinButtonMode.HoldAndSpinTake:
+                AudioManager.Instance?.PlayTakeButton();
+                SetSpinButtonMode(SpinButtonMode.HoldAndSpinTake, interactable: false);
+                if (holdAndSpinView != null) holdAndSpinView.OnTakePressed();
                 return;
 
             case SpinButtonMode.BigWinTake:
@@ -1134,6 +1160,8 @@ public class UIManager : MonoBehaviour
         AutoplayStop,
         FreeGamesStart,
         FreeGamesTake,
+        HoldAndSpinStart,
+        HoldAndSpinTake,
         BigWinTake
     }
 
@@ -1146,6 +1174,8 @@ public class UIManager : MonoBehaviour
     {
         return mode == SpinButtonMode.FreeGamesStart
             || mode == SpinButtonMode.FreeGamesTake
+            || mode == SpinButtonMode.HoldAndSpinStart
+            || mode == SpinButtonMode.HoldAndSpinTake
             || mode == SpinButtonMode.BigWinTake;
     }
 
@@ -1176,8 +1206,10 @@ public class UIManager : MonoBehaviour
         {
             case SpinButtonMode.Stop:           set = stopSprites; break;
             case SpinButtonMode.AutoplayStop:   set = autoplayStopSprites; break;
-            case SpinButtonMode.FreeGamesStart: set = startSprites; break;
+            case SpinButtonMode.FreeGamesStart:
+            case SpinButtonMode.HoldAndSpinStart: set = startSprites; break;
             case SpinButtonMode.FreeGamesTake:
+            case SpinButtonMode.HoldAndSpinTake:
             case SpinButtonMode.BigWinTake:     set = takeSprites; break;
             default:                            set = spinSprites; break;
         }

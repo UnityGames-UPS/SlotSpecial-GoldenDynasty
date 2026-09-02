@@ -10,11 +10,14 @@ public class GameManager : MonoBehaviour
     [SerializeField] private PopupManager popupManager;
     [SerializeField] private SlotView slotView;
     [SerializeField] private FreeGameView freeGameView;
+    [SerializeField] private HoldAndSpinView holdAndSpinView;
 
     [Header("Spin Settings")]
     [SerializeField] private float normalSpinDuration = 3.5f;
     [SerializeField] private float turboSpinDuration = 2.0f;
     [SerializeField] private float quickSpinCycleDuration = 0.1f;
+    [Tooltip("How long the Hold & Spin cells scroll before they start landing. Shorter than a base spin: a round is many respins long and often only one cell is moving.")]
+    [SerializeField] private float holdSpinDuration = 1.2f;
 
     [Header("Free Games Timing")]
     [Tooltip("How long the scatters animate before the award prompt or, on a retrigger, before the counter climbs.")]
@@ -56,6 +59,13 @@ public class GameManager : MonoBehaviour
     // The total the counter was showing before a retrigger landed, so its count-up has somewhere to
     // start from. -1 when no retrigger is pending presentation.
     private int retriggerTotalBefore = -1;
+
+    // True from the moment a Hold & Spin round is triggered until the player takes the win.
+    // Tracked here rather than read off the wire each spin because the presentation runs on for a
+    // while after the server has already closed the round.
+    internal bool isInHoldAndSpin;
+    internal int holdSpinRemaining;        // display only — never used to decide the round is over
+    internal double holdSpinRoundWin;      // server-authoritative, from features.holdAndSpin
 
     internal bool isInitialized;
     internal bool initializationFailed;
@@ -167,7 +177,7 @@ public class GameManager : MonoBehaviour
         if (!socketManager.isConnected) return;
 
         double totalPay = GetTotalPay();
-        if (!isInFreeSpins && playerData.balance < totalPay)
+        if (!isInFreeSpins && !isInHoldAndSpin && playerData.balance < totalPay)
         {
             if (popupManager != null)
             {
@@ -187,7 +197,11 @@ public class GameManager : MonoBehaviour
             {
                 StopAutoPlay();
             }
-            else if (!isInFreeSpins)
+            // Neither feature round can be stopped by hand: free games run themselves, and a Hold &
+            // Spin respin has only Start and Take as presses. A stop here would also set
+            // stopRequested, which SlotView reads as a quick stop on reels that are not even
+            // spinning during a round.
+            else if (!isInFreeSpins && !isInHoldAndSpin)
             {
                 stopRequested = true;
                 uiManager.SetSpinStopButtonStates(isSpinningState: true, isInteractable: false);
@@ -206,8 +220,9 @@ public class GameManager : MonoBehaviour
         currentState = GameState.Spinning;
         stopRequested = false;
 
-        // Deduct total pay from balance on spin start (except in free spins)
-        if (!isInFreeSpins)
+        // Deduct total pay from balance on spin start (except in free spins and Hold & Spin
+        // respins, both of which the server plays for free — the triggering spin was the paid one).
+        if (!isInFreeSpins && !isInHoldAndSpin)
         {
             playerData.balance -= GetTotalPay();
             if (playerData.balance < 0) playerData.balance = 0;
@@ -215,7 +230,14 @@ public class GameManager : MonoBehaviour
 
         uiManager.OnSpinStarted();
 
-        if (slotView != null)
+        // The column reels sit out a Hold & Spin round entirely — they are hidden and the fifteen
+        // cell reels occupy their positions. Starting them here would scroll a board nobody sees
+        // and leave the loop running underneath the feature.
+        if (isInHoldAndSpin)
+        {
+            if (holdAndSpinView != null) holdAndSpinView.StartCellSpin();
+        }
+        else if (slotView != null)
         {
             slotView.StartSpin();
         }
@@ -251,6 +273,30 @@ public class GameManager : MonoBehaviour
         }
 
         currentState = GameState.Stopping;
+
+        // A Hold & Spin respin is run entirely by the feature view: fifteen cells stopping one at a
+        // time, holding whichever land an Orb. SlotView's column stop is not involved — its reels
+        // are hidden for the duration.
+        if (isInHoldAndSpin)
+        {
+            if (holdAndSpinView != null)
+            {
+                holdAndSpinView.RunSpin(
+                    lastResult.resultMatrix,
+                    lastResult.holdAndSpin?.orbPrizes,
+                    holdSpinRemaining,
+                    OnReelsStoppedComplete);
+            }
+            else
+            {
+                // Unwired view: the round still has to advance, or the game locks up. Falling
+                // through to SlotView's stop is not an option — those reels are hidden and were
+                // never started.
+                OnReelsStoppedComplete();
+            }
+
+            yield break;
+        }
 
         if (slotView != null && lastResult.resultMatrix != null)
         {
@@ -469,6 +515,14 @@ public class GameManager : MonoBehaviour
 
     private float GetSpinDuration()
     {
+        // A Hold & Spin respin is its own thing: often only one or two cells are moving, and the
+        // round is many spins long, so the base game's 3.5s would make it a slog. Turbo still
+        // shortens it — the feature honours turbo like any other spin.
+        if (isInHoldAndSpin)
+        {
+            return currentSpinSpeed == SpinSpeed.Normal ? holdSpinDuration : turboSpinDuration;
+        }
+
         return currentSpinSpeed switch
         {
             SpinSpeed.Normal => normalSpinDuration,
@@ -512,6 +566,20 @@ public class GameManager : MonoBehaviour
                 freeGameView.UpdateCounter(freeSpinsRemaining, FreeSpinsTotalAwarded);
             }
         }
+
+        // Hold & Spin's counters, kept for display only. The round's end is decided by
+        // holdAndSpin.active in ProcessSpinResult, never by this reaching zero — captured rounds
+        // that ended by filling the board still reported 3 and 2 spins remaining.
+        if (result.holdAndSpin != null)
+        {
+            holdSpinRemaining = result.holdAndSpin.spinsRemaining;
+
+            // The total comes from currentWinning, NOT from holdAndSpin.roundWin (totalOrbPayout).
+            // They agree, but only currentWinning is rounded — one captured payout arrived as
+            // 12.100000000000001 in totalOrbPayout against a clean 12.1 in currentWinning, and it
+            // is currentWinning the balance actually moved by. Zero on every spin until the payout.
+            if (isInHoldAndSpin) holdSpinRoundWin = result.winAmount;
+        }
     }
 
     private void ProcessSpinResult()
@@ -519,6 +587,35 @@ public class GameManager : MonoBehaviour
         playerData = lastResult.playerData;
 
         uiManager.OnSpinCompleted(lastResult);
+
+        HoldAndSpinData holdAndSpin = lastResult.holdAndSpin;
+
+        // A Hold & Spin round ends on active going false — never on spinsRemaining reaching zero.
+        // Captured rounds that ended by filling the board reported 3 and 2 spins remaining, because
+        // the Orb that filled it had just reset the counter on the same spin that closed the round.
+        if (isInHoldAndSpin)
+        {
+            if (holdAndSpin == null || !holdAndSpin.active)
+            {
+                EndHoldAndSpin();
+            }
+            else
+            {
+                currentState = GameState.Idle;
+                StartCoroutine(DelayBeforeNextHoldSpin());
+            }
+
+            lastResult = null;
+            return;
+        }
+
+        // The triggering spin is an ordinary paid base spin that happens to report triggered.
+        if (holdAndSpin != null && holdAndSpin.triggered)
+        {
+            StartHoldAndSpin(holdAndSpin);
+            lastResult = null;
+            return;
+        }
 
         // A trigger is a spin that awarded spins while not itself being a free spin — the awarding
         // spin is an ordinary paid base spin. A retrigger has spinsAwarded set too, but with
@@ -632,7 +729,11 @@ public class GameManager : MonoBehaviour
         // Autoplay skips the per-line cycle while it runs, so the round it just finished is parked
         // after Phase 1. Now that no further spin is coming, present it the way a manual spin would.
         // Covers both endings: the last scheduled round, and the player stopping part-way.
-        if (!isInFreeSpins && slotView != null) slotView.PlayWinLineCycle();
+        //
+        // Both feature rounds are excluded. StartHoldAndSpin calls this to park autoplay before the
+        // round begins, and the triggering spin may well have paid a line — cycling those lines here
+        // would run them underneath the feature intro for the next twenty seconds.
+        if (!isInFreeSpins && !isInHoldAndSpin && slotView != null) slotView.PlayWinLineCycle();
     }
 
     internal bool ShouldResumeAutoPlay()
@@ -774,6 +875,116 @@ public class GameManager : MonoBehaviour
         freeSpinsUsed = 0;
         freeSpinsRoundWin = 0;
         retriggerTotalBefore = -1;
+
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.Spin);
+        uiManager.SetFreeGamesButtonLock(false);
+
+        currentState = GameState.Idle;
+
+        if (ShouldResumeAutoPlay())
+        {
+            ResumeAutoPlay();
+        }
+    }
+
+    #endregion
+
+    #region Hold & Spin
+
+    // The triggering spin has landed and been presented. Its Orbs are already drawn on the Orb
+    // layer by the base-game pass, and the feature adopts them rather than redrawing — which is
+    // what stops their animations restarting as the round begins.
+    private void StartHoldAndSpin(HoldAndSpinData holdAndSpin)
+    {
+        isInHoldAndSpin = true;
+        holdSpinRemaining = holdAndSpin.spinsRemaining;
+        holdSpinRoundWin = 0;
+
+        AudioManager.Instance?.PlayFreeSpinBg();
+
+        int prevTotal = autoPlayTotalRounds;
+        int prevRemaining = autoPlayRemainingRounds;
+
+        // Shares the free-games save slot deliberately. The two rounds can never overlap — one spin
+        // enters one feature — and the fields hold "autoplay as it was before a feature round"
+        // rather than anything specific to free games.
+        if (isAutoPlaying)
+        {
+            StopAutoPlay();
+            wasAutoPlayingBeforeFreeSpins = true;
+            savedAutoPlayTotalRounds = prevTotal;
+            savedAutoPlayRemainingRounds = (prevTotal != -1) ? (prevRemaining - 1) : -1;
+        }
+
+        uiManager.SetFreeGamesButtonLock(true);
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.HoldAndSpinStart);
+
+        currentState = GameState.Idle;
+
+        if (holdAndSpinView != null)
+        {
+            holdAndSpinView.BeginTrigger(holdAndSpin.orbPrizes, null);
+        }
+    }
+
+    // The Start button — routed here by UIManager's HoldAndSpinStart mode. The prompt gives way to
+    // the counters and the first respin follows.
+    internal void StartFirstHoldSpin()
+    {
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.HoldAndSpinStart, interactable: false);
+
+        if (holdAndSpinView == null)
+        {
+            StartCoroutine(DelayBeforeNextHoldSpin());
+            return;
+        }
+
+        holdAndSpinView.StartRound(holdSpinRemaining, () => StartCoroutine(DelayBeforeNextHoldSpin()));
+    }
+
+    private IEnumerator DelayBeforeNextHoldSpin()
+    {
+        yield return new WaitForSeconds(0.3f);
+        RequestSpin();
+    }
+
+    // The server has closed the round and paid it through currentWinning. Everything from here is
+    // presentation; the money has already moved.
+    private void EndHoldAndSpin()
+    {
+        double roundWin = holdSpinRoundWin;
+
+        // Cleared before the outro so the win box stops being suppressed and the balance display
+        // behaves normally again while the payout counts up.
+        isInHoldAndSpin = false;
+        holdSpinRemaining = 0;
+
+        AudioManager.Instance?.PlayMainBg();
+
+        if (holdAndSpinView != null)
+        {
+            holdAndSpinView.PlayOutro(roundWin, OnHoldSpinCountUpComplete, OnHoldSpinOutroComplete);
+        }
+        else
+        {
+            OnHoldSpinOutroComplete();
+        }
+    }
+
+    // The total has finished counting up — Take becomes pressable. HoldAndSpinView owns what
+    // happens on the press and calls back through OnHoldSpinOutroComplete.
+    private void OnHoldSpinCountUpComplete()
+    {
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.HoldAndSpinTake);
+    }
+
+    // Player took the win — put the board back.
+    private void OnHoldSpinOutroComplete()
+    {
+        holdSpinRoundWin = 0;
+
+        if (holdAndSpinView != null) holdAndSpinView.ResetToDefault();
+        if (slotView != null) slotView.ClearOrbLayer();
 
         uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.Spin);
         uiManager.SetFreeGamesButtonLock(false);
