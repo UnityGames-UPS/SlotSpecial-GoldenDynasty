@@ -51,11 +51,30 @@ public class HoldAndSpinView : MonoBehaviour
     [SerializeField] private TMPro.TMP_Text spinsRemainingCount;
 
     [Header("Payout")]
-    [Tooltip("The \"Winner\" graphic shown once the round ends.")]
+    [Tooltip("Parent for the whole payout presentation — both holders and the Winner graphic.")]
     [SerializeField] private GameObject winnerPanel;
     [SerializeField] private CanvasGroup winnerPanelGroup;
-    [Tooltip("The total-win figure counted up inside the Winner panel.")]
-    [SerializeField] private TMPro.TMP_Text winnerTotalText;
+
+    [Tooltip("The \"Winner\" graphic. Distinct from the \"Win\" label inside the red holder. Raised for the second count-up only.")]
+    [SerializeField] private GameObject winnerGraphic;
+    [SerializeField] private ImageAnimation winnerGraphicAnim;
+
+    [Header("Payout — Winner Blue (running total)")]
+    [Tooltip("Holder for the total that climbs one Orb at a time. Animates on the holder itself.")]
+    [SerializeField] private GameObject winnerBlue;
+    [SerializeField] private ImageAnimation winnerBlueAnim;
+    [SerializeField] private TMPro.TMP_Text winnerBlueText;
+
+    [Header("Payout — Winner Red (final count-up)")]
+    [Tooltip("Holder for the count-up from zero. Unlike blue it carries no animation of its own — the movement is in the two groups below.")]
+    [SerializeField] private GameObject winnerRed;
+    [SerializeField] private TMPro.TMP_Text winnerRedText;
+
+    [Tooltip("Parent of the animating side effects. Its ImageAnimations are found in its children, so however many there are they need no wiring.")]
+    [SerializeField] private CanvasGroup winnerRedEffectsGroup;
+
+    [Tooltip("Parent of the \"Win\" graphics. Pulses in OPPOSITE phase to the effects above — at 1 when they are at 0.")]
+    [SerializeField] private CanvasGroup winnerRedWinGroup;
 
     [Header("Board Dressing")]
     [Tooltip("The SlotShed's Image. NOT sprite-swapped — the same object stays at the same size and only its colour changes.")]
@@ -83,10 +102,16 @@ public class HoldAndSpinView : MonoBehaviour
     private const float darkOverlayAlpha = 0.75f;
     private const float payoutHoldBeforeCountUp = 0.4f;
     private const float payoutCountUpDuration = 2.0f;
+    private const float redPulseDuration = 0.6f;        // one half of the cross-fade, effects <-> Win
 
     private Coroutine activeSequence;
     private Tween promptPulseTween;
+    private Tween redPulseTween;
     private Action pendingTakeCallback;
+
+    // Cached on first use from winnerRedEffectsGroup's children, so however many side effects the
+    // scene ends up with, none of them need wiring.
+    private ImageAnimation[] redEffectAnims;
 
     private Color slotShedOriginalColour;
     private Sprite backgroundOriginalSprite;
@@ -195,6 +220,8 @@ public class HoldAndSpinView : MonoBehaviour
     {
         StopActiveSequence();
         StopPromptPulse();
+        StopRedPulse();
+        StopPayoutAnimations();
 
         heldCells.Clear();
 
@@ -211,6 +238,9 @@ public class HoldAndSpinView : MonoBehaviour
         if (pressStartFeature != null) pressStartFeature.SetActive(false);
         if (counterPanel != null) counterPanel.SetActive(false);
         if (winnerPanel != null) winnerPanel.SetActive(false);
+        if (winnerBlue != null) winnerBlue.SetActive(false);
+        if (winnerRed != null) winnerRed.SetActive(false);
+        if (winnerGraphic != null) winnerGraphic.SetActive(false);
 
         SetGroupAlpha(darkOverlayGroup, 0f, false);
         SetGroupAlpha(topGroup, 1f, true);
@@ -387,12 +417,22 @@ public class HoldAndSpinView : MonoBehaviour
 
         if (winnerPanel != null) winnerPanel.SetActive(true);
         SetGroupAlpha(winnerPanelGroup, 1f, true);
-        if (winnerTotalText != null) winnerTotalText.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
+
+        // 3. Blue: the running total. Its per-Orb walk is not built yet, so the figure is written
+        //    straight to the finished total — which is exactly where the walk ends up, so adding it
+        //    later replaces one assignment and disturbs nothing else here.
+        ShowWinnerBlue(roundWin);
 
         yield return new WaitForSeconds(payoutHoldBeforeCountUp);
 
-        // 3. Straight count-up to the round total.
-        if (winnerTotalText != null && roundWin > 0)
+        // 4. Red takes over, and only now does the Winner graphic come up. Blue's holder goes with
+        //    it — the two are never on screen together.
+        ShowWinnerRed();
+
+        // 5. Count up from zero to the same total. The second climb is intentional: the totals
+        //    match, but they are different objects in different holders, so nothing visibly drops
+        //    back to zero.
+        if (winnerRedText != null && roundWin > 0)
         {
             double shown = 0;
             yield return DOTween.To(
@@ -400,7 +440,7 @@ public class HoldAndSpinView : MonoBehaviour
                     value =>
                     {
                         shown = value;
-                        winnerTotalText.text = value.ToString(SpriteTextFormatter.MoneyFormat);
+                        winnerRedText.text = value.ToString(SpriteTextFormatter.MoneyFormat);
                     },
                     (float)roundWin,
                     payoutCountUpDuration)
@@ -408,12 +448,122 @@ public class HoldAndSpinView : MonoBehaviour
                 .WaitForCompletion();
         }
 
-        if (winnerTotalText != null) winnerTotalText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
+        if (winnerRedText != null) winnerRedText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
 
-        // 4. Take becomes pressable. GameManager owns the button; OnTakePressed carries on.
+        // 6. Take becomes pressable. GameManager owns the button; OnTakePressed carries on.
         onCountUpComplete?.Invoke();
 
         activeSequence = null;
+    }
+
+    private void ShowWinnerBlue(double roundWin)
+    {
+        if (winnerRed != null) winnerRed.SetActive(false);
+        if (winnerGraphic != null) winnerGraphic.SetActive(false);
+
+        if (winnerBlue != null) winnerBlue.SetActive(true);
+        if (winnerBlueText != null) winnerBlueText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
+
+        if (winnerBlueAnim != null)
+        {
+            winnerBlueAnim.doLoopAnimation = true;
+            winnerBlueAnim.onLoopComplete = null;
+            winnerBlueAnim.StartAnimation();
+        }
+    }
+
+    private void ShowWinnerRed()
+    {
+        if (winnerBlueAnim != null) winnerBlueAnim.StopAnimation();
+        if (winnerBlue != null) winnerBlue.SetActive(false);
+
+        if (winnerRed != null) winnerRed.SetActive(true);
+        if (winnerRedText != null) winnerRedText.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
+
+        if (winnerGraphic != null) winnerGraphic.SetActive(true);
+        if (winnerGraphicAnim != null)
+        {
+            winnerGraphicAnim.doLoopAnimation = true;
+            winnerGraphicAnim.onLoopComplete = null;
+            winnerGraphicAnim.StartAnimation();
+        }
+
+        StartRedEffectAnimations();
+        StartRedPulse();
+    }
+
+    // The side effects run their own clips. Found in the group's children rather than wired, so the
+    // number of them is a scene decision rather than something the code has to be told.
+    private void StartRedEffectAnimations()
+    {
+        if (winnerRedEffectsGroup == null) return;
+
+        if (redEffectAnims == null)
+        {
+            redEffectAnims = winnerRedEffectsGroup.GetComponentsInChildren<ImageAnimation>(true);
+        }
+
+        foreach (var anim in redEffectAnims)
+        {
+            if (anim == null) continue;
+            anim.doLoopAnimation = true;
+            anim.onLoopComplete = null;
+            anim.StartAnimation();
+        }
+    }
+
+    /// <summary>
+    /// Cross-fades the side effects against the "Win" graphics — when one is at full alpha the
+    /// other is at zero.
+    ///
+    /// Driven by a SINGLE tween writing both alphas from one value, rather than two yoyo tweens
+    /// started opposite. Two tweens look correct for a few seconds and then drift apart, and the
+    /// drift is gradual enough to be miserable to diagnose. One driver cannot go out of phase.
+    /// </summary>
+    private void StartRedPulse()
+    {
+        StopRedPulse();
+        if (winnerRedEffectsGroup == null && winnerRedWinGroup == null) return;
+
+        if (winnerRedEffectsGroup != null) winnerRedEffectsGroup.alpha = 1f;
+        if (winnerRedWinGroup != null) winnerRedWinGroup.alpha = 0f;
+
+        float driver = 1f;
+        redPulseTween = DOTween.To(
+                () => driver,
+                value =>
+                {
+                    driver = value;
+                    if (winnerRedEffectsGroup != null) winnerRedEffectsGroup.alpha = value;
+                    if (winnerRedWinGroup != null) winnerRedWinGroup.alpha = 1f - value;
+                },
+                0f,
+                redPulseDuration)
+            .SetEase(Ease.InOutSine)
+            .SetLoops(-1, LoopType.Yoyo);
+    }
+
+    private void StopRedPulse()
+    {
+        if (redPulseTween != null)
+        {
+            redPulseTween.Kill();
+            redPulseTween = null;
+        }
+    }
+
+    // Both holders' clips loop indefinitely once started, so they have to be stopped explicitly —
+    // nothing else ends them, and a live clip would keep ticking over a hidden object.
+    private void StopPayoutAnimations()
+    {
+        if (winnerBlueAnim != null) winnerBlueAnim.StopAnimation();
+        if (winnerGraphicAnim != null) winnerGraphicAnim.StopAnimation();
+
+        if (redEffectAnims == null) return;
+        foreach (var anim in redEffectAnims)
+        {
+            if (anim != null) anim.StopAnimation();
+        }
     }
 
     #endregion
