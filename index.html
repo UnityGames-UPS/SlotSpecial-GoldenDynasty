@@ -37,19 +37,7 @@
   <canvas id="unity-canvas" tabindex="-1"></canvas>
   <script>
     const canvas = document.querySelector("#unity-canvas");
-    var unityInstance = null;   // captured on load; jslib listeners use it as a SendMessage fallback
-    var lastProgressSent = -1;
 
-    // Forward loader progress to the host; loading-complete is signalled by Unity's "OnEnter".
-    function sendProgressToPlatform(progressValue) {
-      var percentage = Math.round(progressValue * 100);
-      if (percentage === lastProgressSent) return;
-      lastProgressSent = percentage;
-      if (window.parent) {
-        window.parent.postMessage({ type: "UnityLoaderProgress", progress: percentage }, "*");
-      }
-    }
-    // Pin the canvas to the visible viewport; Unity (OrientationChange) owns aspect ratio & rotation.
     function resizeCanvas() {
       // visualViewport is the accurate visible area on iOS; fall back to innerWidth/Height.
       var vv = window.visualViewport;
@@ -93,10 +81,7 @@
     script.src = loaderUrl;
     script.onload = () => {
       createUnityInstance(canvas, config, (progress) => {
-        sendProgressToPlatform(progress);
-      }).then((instance) => {
-        unityInstance = instance;
-        resizeCanvas();
+      }).then((unityInstance) => {
       }).catch((message) => {
         alert(message);
       });
@@ -105,7 +90,6 @@
     document.body.appendChild(script);
     window.addEventListener('load', resizeCanvas);
   </script>
-  <!-- Inbound host messages (TokenReceived) are handled by CustomJsLib.jslib, registered from C#. -->
   <script>
     window.focus();
   </script>
