@@ -1,206 +1,114 @@
 using UnityEngine;
 using UnityEngine.UI;
 using DG.Tweening;
-using System;
 using System.Collections;
 
 public class OrientationChange : MonoBehaviour
 {
-    public enum OrientationMode
-    {
-        Landscape,
-        DesktopPortrait,
-        MobilePortrait
-    }
-    [SerializeField] private bool isPortraitLocked = true;
-
-    [Header("UI References")]
-    [SerializeField] private RectTransform UIWrapper;
+    // Golden Dynasty is portrait-only, so nothing here rotates. The version this was taken from
+    // forced landscape by turning the UI 90 degrees on tall screens; that rotation, and the
+    // UIWrapper it acted on, are gone. All that adapts is the CanvasScaler's match value, which
+    // letterboxes the 1080x1920 canvas — side margins on a wide desktop window, full-screen on a
+    // phone.
+    [Header("References")]
     [SerializeField] private CanvasScaler CanvasScaler;
 
-    [Header("Transition Settings")]
+    [Header("Transition")]
     [SerializeField] private float transitionDuration = 0.2f;
     [SerializeField] private float waitForRotation = 0.2f;
-
-    [Header("Device Detection Settings")]
-    [SerializeField] private string androidKeyword = "MB";
-    [SerializeField] private string iphoneKeyword = "IP";
-    [SerializeField] private string mobileKeyword = "mobile";
-    [SerializeField] private string currentDevice = "";
-
-    public static event Action<OrientationMode, int, int> OnOrientationChanged;
-    public event Action<OrientationMode, int, int> OnOrientationChangedInstance;
-
-    private Vector2 ReferenceAspect;
+    private Vector2 referenceResolution;
     private Tween matchTween;
-    private Tween rotationTween;
     private Coroutine rotationRoutine;
-    // private bool isLandscape;
-    private OrientationMode currentMode = OrientationMode.Landscape;
 
+    // Last size the match was calculated for. Update polls against these — SwitchDisplay only
+    // fires when the host page reports a resize, so without the poll nothing responds to the
+    // window changing shape in the editor, or in a build whose host reports late or not at all.
     private int lastWidth = 0;
     private int lastHeight = 0;
 
-    public string CurrentDevice => currentDevice;
-    public OrientationMode CurrentMode => currentMode;
-    // public bool IsLandscape => isLandscape;
-    public bool IsMobile => IsMobileDevice();
-
     private void Awake()
     {
-        if (CanvasScaler != null)
-        {
-            ReferenceAspect = CanvasScaler.referenceResolution;
-        }
-        else
-        {
-            ReferenceAspect = new Vector2(1920, 1080);
-        }
+        referenceResolution = CanvasScaler.referenceResolution; 
+
+        ApplyMatch(Screen.width, Screen.height, instant: true);
     }
 
-    private void Start()
-    {
-        ApplyMatch(Screen.width, Screen.height);
-    }
-
-    public void DeviceCheck(string device)
-    {
-        DiviceCheck(device);
-    }
-
-    public void DiviceCheck(string device)
-    {
-        Debug.Log($"[OrientationChange] Device detected: {device}");
-        currentDevice = device;
-        int w = lastWidth > 0 ? lastWidth : Screen.width;
-        int h = lastHeight > 0 ? lastHeight : Screen.height;
-        ApplyMatch(w, h);
-    }
-
-    public bool IsMobileDevice()
-    {
-        if (!string.IsNullOrEmpty(currentDevice))
-        {
-            string dev = currentDevice.ToLower();
-            if (dev.Contains("desktop"))
-            {
-                return false;
-            }
-            return (!string.IsNullOrEmpty(androidKeyword) && dev.Contains(androidKeyword.ToLower())) ||
-                   (!string.IsNullOrEmpty(iphoneKeyword) && dev.Contains(iphoneKeyword.ToLower())) ||
-                   (!string.IsNullOrEmpty(mobileKeyword) && dev.Contains(mobileKeyword.ToLower()));
-        }
-#if UNITY_EDITOR
-        return true;
-#else
-        return Application.isMobilePlatform || SystemInfo.deviceType == DeviceType.Handheld;
-#endif
-    }
-
-    public void SwitchDisplay(string dimensions)
+    void SwitchDisplay(string dimensions)
     {
         if (rotationRoutine != null) StopCoroutine(rotationRoutine);
         rotationRoutine = StartCoroutine(RotationCoroutine(dimensions));
     }
 
-    private IEnumerator RotationCoroutine(string dimensions)
+    IEnumerator RotationCoroutine(string dimensions)
     {
         yield return new WaitForSecondsRealtime(waitForRotation);
+
         string[] parts = dimensions.Split(',');
-        if (parts.Length == 2 && int.TryParse(parts[0], out int width) && int.TryParse(parts[1], out int height) && width > 0 && height > 0)
+        if (parts.Length == 2
+            && int.TryParse(parts[0], out int w)
+            && int.TryParse(parts[1], out int h)
+            && w > 0 && h > 0)
         {
-            ApplyMatch(width, height);
+            ApplyMatch(w, h, instant: false);
         }
         else
         {
-            Debug.LogWarning("Unity: Invalid format received in SwitchDisplay");
+            Debug.LogWarning("[OrientationChange] Invalid dimensions: " + dimensions);
         }
     }
 
-    private void ApplyMatch(int width, int height)
+    private void ApplyMatch(int screenW, int screenH, bool instant)
     {
-        lastWidth = width;
-        lastHeight = height;
-        //  isLandscape = width > height;
-        bool isMobile = IsMobileDevice();
+        lastWidth = screenW;
+        lastHeight = screenH;
 
-        // if (isLandscape)
-        // {
-        //     currentMode = OrientationMode.Landscape;
-        // }
-        if (isMobile)
+        float refW = referenceResolution.x;
+        float refH = referenceResolution.y;
+
+        float widthScale = screenW / refW;
+        float heightScale = screenH / refH;
+
+        float targetMatch;
+        if (Mathf.Abs(heightScale - widthScale) < 0.0001f)
         {
-            currentMode = OrientationMode.MobilePortrait;
+            targetMatch = 0.5f;
         }
         else
         {
-            currentMode = OrientationMode.DesktopPortrait;
+            // Fit the whole canvas inside the window. The version this came from picked between
+            // this and an axis-swapped variant, because its other branch was the rotated one —
+            // screen height mapped to canvas width there. Nothing rotates now, so the swap is
+            // always wrong and only this remains.
+            float targetScale = Mathf.Min(widthScale, heightScale);
+            float logRatio = Mathf.Log(heightScale / widthScale);
+            targetMatch = Mathf.Clamp01(Mathf.Log(targetScale / widthScale) / logRatio);
         }
 
-        // Apply Rotation: DesktopPortrait gets -90 degrees rotation, MobilePortrait & Landscape get 0 degrees.
-        Quaternion targetRotation = (currentMode == OrientationMode.DesktopPortrait) ? Quaternion.Euler(0, 0, -90) : Quaternion.identity;
-        if (UIWrapper != null)
+        if (instant)
         {
-            if (rotationTween != null && rotationTween.IsActive()) rotationTween.Kill();
-            rotationTween = UIWrapper.DOLocalRotateQuaternion(targetRotation, transitionDuration).SetEase(Ease.OutCubic);
+            CanvasScaler.matchWidthOrHeight = targetMatch;
+            return;
         }
 
-        // Calculate CanvasScaler Match Width/Height
-        if (CanvasScaler != null)
-        {
-            Vector2 refRes = (currentMode == OrientationMode.MobilePortrait) ? new Vector2(1080f, 1920f) : new Vector2(1920f, 1080f);
-            CanvasScaler.referenceResolution = refRes;
-
-            float refW = refRes.x;
-            float refH = refRes.y;
-
-            float scaleW, scaleH;
-            if (currentMode == OrientationMode.DesktopPortrait)
-            {
-                // In DesktopPortrait, UIWrapper is rotated -90 degrees.
-                // Canvas width (1920) corresponds to screen height.
-                // Canvas height (1080) corresponds to screen width.
-                scaleW = (float)height / refW;
-                scaleH = (float)width / refH;
-            }
-            else
-            {
-                scaleW = (float)width / refW;
-                scaleH = (float)height / refH;
-            }
-
-            float targetMatch = (scaleW <= scaleH) ? 0f : 1f;
-
-            if (matchTween != null && matchTween.IsActive()) matchTween.Kill();
-            matchTween = DOTween.To(() => CanvasScaler.matchWidthOrHeight, x => CanvasScaler.matchWidthOrHeight = x, targetMatch, transitionDuration).SetEase(Ease.InOutQuad);
-        }
-
-        Debug.Log($"[OrientationChange] Dimensions: {width}x{height}, Mode: {currentMode}, isLandscape:, isMobile: {isMobile}");
-
-        // Notify Listeners (including OCController)
-        OnOrientationChanged?.Invoke(currentMode, width, height);
-        OnOrientationChangedInstance?.Invoke(currentMode, width, height);
+        if (matchTween != null && matchTween.IsActive()) matchTween.Kill();
+        matchTween = DOTween
+          .To(
+            () => CanvasScaler.matchWidthOrHeight,
+            x => CanvasScaler.matchWidthOrHeight = x,
+            targetMatch,
+            transitionDuration)
+          .SetEase(Ease.InOutQuad);
     }
-
     private void Update()
     {
         if (Screen.width != lastWidth || Screen.height != lastHeight)
         {
-            ApplyMatch(Screen.width, Screen.height);
+            ApplyMatch(Screen.width, Screen.height, instant: false);
         }
 
 #if UNITY_EDITOR
         if (Input.GetKeyDown(KeyCode.Space))
-        {
-            int w = lastHeight > 0 ? lastHeight : Screen.height;
-            int h = lastWidth > 0 ? lastWidth : Screen.width;
-            SwitchDisplay(w + "," + h);
-        }
-        if (Input.GetKeyDown(KeyCode.M))
-        {
-            string nextDevice = IsMobileDevice() ? "desktop" : "mobile";
-            DiviceCheck(nextDevice);
-        }
+            SwitchDisplay($"{Screen.width},{Screen.height}");
 #endif
     }
 }

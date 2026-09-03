@@ -3537,11 +3537,6 @@ MonoBehaviour:
   m_ChildScaleWidth: 0
   m_ChildScaleHeight: 0
   m_ReverseArrangement: 0
---- !u!224 &102419027 stripped
-RectTransform:
-  m_CorrespondingSourceObject: {fileID: 3134030912641328077, guid: a1df8fa82a20d4615a20c50685dc0552, type: 3}
-  m_PrefabInstance: {fileID: 421331489}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1001 &105807291
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -22636,11 +22631,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 564333208}
   m_CullTransparentMesh: 1
---- !u!224 &566114386 stripped
-RectTransform:
-  m_CorrespondingSourceObject: {fileID: 4193578959745380800, guid: a1df8fa82a20d4615a20c50685dc0552, type: 3}
-  m_PrefabInstance: {fileID: 421331489}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1001 &568080472
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -26467,11 +26457,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 657070072}
   m_CullTransparentMesh: 1
---- !u!224 &657936229 stripped
-RectTransform:
-  m_CorrespondingSourceObject: {fileID: 1646525436312499469, guid: a1df8fa82a20d4615a20c50685dc0552, type: 3}
-  m_PrefabInstance: {fileID: 421331489}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1 &660934756
 GameObject:
   m_ObjectHideFlags: 0
@@ -34400,94 +34385,6 @@ CanvasGroup:
   m_Interactable: 1
   m_BlocksRaycasts: 1
   m_IgnoreParentGroups: 0
---- !u!1 &873413468
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 873413470}
-  - component: {fileID: 873413469}
-  m_Layer: 0
-  m_Name: OC Controller
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &873413469
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 873413468}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: cecdecac5054f4f37982a0e085ad54c8, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::OCController
-  orientationChange: {fileID: 1353408117}
-  canvasScaler: {fileID: 2095227328}
-  slotObject: {fileID: 749700607}
-  resizedObjects:
-  - {fileID: 274675663}
-  - {fileID: 2115638692}
-  - {fileID: 627276383}
-  - {fileID: 1633063687}
-  - {fileID: 1422656206}
-  - {fileID: 1462445608}
-  - {fileID: 1502470263}
-  squareResizedObjects:
-  - {fileID: 0}
-  - {fileID: 0}
-  landscapePanelObject: {fileID: 161473516}
-  portraitPanelObject: {fileID: 360998096}
-  landscapeBackground: {fileID: 612787880}
-  portraitBackground: {fileID: 1228590864}
-  landscapeReferenceResolution: {x: 1920, y: 1080}
-  portraitReferenceResolution: {x: 1080, y: 1920}
-  landscapeResizedObjectSize: {x: 1920, y: 1080}
-  portraitResizedObjectSize: {x: 1080, y: 1920}
-  landscapeSquareResizedObjectSize: {x: 1920, y: 1080}
-  portraitSquareResizedObjectSize: {x: 1920, y: 1920}
-  landscapeSlotScale: {x: 1, y: 1, z: 1}
-  portraitSlotScale: {x: 0.85, y: 0.85, z: 0.85}
-  landscapeSlotPosition: {x: 0, y: 0, z: 0}
-  portraitSlotPosition: {x: 0, y: -402, z: 0}
-  logoObject: {fileID: 1043789825}
-  landscapeLogoScale: {x: 1, y: 1, z: 1}
-  portraitLogoScale: {x: 1.27, y: 1.27, z: 1.27}
-  landscapeLogoPosition: {x: 0, y: 380}
-  portraitLogoPosition: {x: 0, y: 525}
-  infoPageScrollObject: {fileID: 1439971687}
-  guideScrollObject: {fileID: 241912261}
-  transitionDuration: 0.2
-  grandJackpotPortraitParent: {fileID: 102419027}
-  majorJackpotPortraitParent: {fileID: 657936229}
-  minorJackpotPortraitParent: {fileID: 2011981752}
-  miniJackpotPortraitParent: {fileID: 566114386}
-  enableJackpotPortraitLevitation: 1
-  jackpotLevitateHeight: 10
-  jackpotLevitateDuration: 1.4
-  jackpotStaggerDelay: 0.15
---- !u!4 &873413470
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 873413468}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -20.95429, y: -4.80078, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &876545710
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -47856,7 +47753,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f521a04de7f494272a617b2719edd271, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SocketIOManager
-  testToken: 2f792774aee341aeb58c83df7a8f3109
+  testToken: 2bf35a39b72e4bb0a9c4814e633537e5
   gameManager: {fileID: 1206269883}
   uiManager: {fileID: 885496184}
   popupManager: {fileID: 1363796882}
@@ -52106,15 +52003,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 36ff3beb5fc764d3ab2a0b7369907ce5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::OrientationChange
-  isPortraitLocked: 1
-  UIWrapper: {fileID: 274675663}
   CanvasScaler: {fileID: 2095227328}
   transitionDuration: 0.2
   waitForRotation: 0.2
-  androidKeyword: MB
-  iphoneKeyword: IP
-  mobileKeyword: mobile
-  currentDevice: 
 --- !u!4 &1353408118
 Transform:
   m_ObjectHideFlags: 0
@@ -77012,11 +76903,6 @@ MonoBehaviour:
   currentAnimationState: 0
   AnimationSpeed: 30
   delayBetweenLoop: 0
---- !u!224 &2011981752 stripped
-RectTransform:
-  m_CorrespondingSourceObject: {fileID: 3792431641083567211, guid: a1df8fa82a20d4615a20c50685dc0552, type: 3}
-  m_PrefabInstance: {fileID: 421331489}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1 &2018441759
 GameObject:
   m_ObjectHideFlags: 0
@@ -82449,4 +82335,3 @@ SceneRoots:
   - {fileID: 1363796883}
   - {fileID: 1330086577}
   - {fileID: 1353408118}
-  - {fileID: 873413470}
