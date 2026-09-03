@@ -71,7 +71,6 @@ public class SocketIOManager : MonoBehaviour
 #if UNITY_WEBGL && !UNITY_EDITOR
         if (JSManager != null)
         {
-            JSManager.RegisterAuthTokenListener(gameObject.name); // listen for host's TokenReceived before asking
             JSManager.SendCustomMessage("authToken");
         }
 #else

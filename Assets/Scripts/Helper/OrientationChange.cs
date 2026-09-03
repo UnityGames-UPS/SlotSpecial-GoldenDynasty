@@ -12,6 +12,7 @@ public class OrientationChange : MonoBehaviour
         DesktopPortrait,
         MobilePortrait
     }
+    [SerializeField] private bool isPortraitLocked = true;
 
     [Header("UI References")]
     [SerializeField] private RectTransform UIWrapper;
@@ -34,7 +35,7 @@ public class OrientationChange : MonoBehaviour
     private Tween matchTween;
     private Tween rotationTween;
     private Coroutine rotationRoutine;
-    private bool isLandscape;
+    // private bool isLandscape;
     private OrientationMode currentMode = OrientationMode.Landscape;
 
     private int lastWidth = 0;
@@ -42,7 +43,7 @@ public class OrientationChange : MonoBehaviour
 
     public string CurrentDevice => currentDevice;
     public OrientationMode CurrentMode => currentMode;
-    public bool IsLandscape => isLandscape;
+    // public bool IsLandscape => isLandscape;
     public bool IsMobile => IsMobileDevice();
 
     private void Awake()
@@ -120,14 +121,14 @@ public class OrientationChange : MonoBehaviour
     {
         lastWidth = width;
         lastHeight = height;
-        isLandscape = width > height;
+        //  isLandscape = width > height;
         bool isMobile = IsMobileDevice();
 
-        if (isLandscape)
-        {
-            currentMode = OrientationMode.Landscape;
-        }
-        else if (isMobile)
+        // if (isLandscape)
+        // {
+        //     currentMode = OrientationMode.Landscape;
+        // }
+        if (isMobile)
         {
             currentMode = OrientationMode.MobilePortrait;
         }
@@ -174,7 +175,7 @@ public class OrientationChange : MonoBehaviour
             matchTween = DOTween.To(() => CanvasScaler.matchWidthOrHeight, x => CanvasScaler.matchWidthOrHeight = x, targetMatch, transitionDuration).SetEase(Ease.InOutQuad);
         }
 
-        Debug.Log($"[OrientationChange] Dimensions: {width}x{height}, Mode: {currentMode}, isLandscape: {isLandscape}, isMobile: {isMobile}");
+        Debug.Log($"[OrientationChange] Dimensions: {width}x{height}, Mode: {currentMode}, isLandscape:, isMobile: {isMobile}");
 
         // Notify Listeners (including OCController)
         OnOrientationChanged?.Invoke(currentMode, width, height);

@@ -235,6 +235,11 @@ public class SlotView : MonoBehaviour
     // to stop, so the landing write knows to draw a Mystery there instead of the revealed symbol.
     private readonly HashSet<int> mysteryCells = new HashSet<int>();
 
+    // This spin's Orbs and their prizes, captured when the reels are told to stop. Held here rather
+    // than read from the controller at draw time because the draw fires on each reel's landing
+    // tween, by which point the result may already have been consumed and cleared.
+    private readonly Dictionary<int, double> pendingOrbPrizes = new Dictionary<int, double>();
+
     // Ids the scroll buffer is allowed to pick from — every symbol except Orb and Mystery. Neither
     // should ever appear unless the backend actually placed it there: an Orb always needs a real
     // prize value attached, and Mystery has no meaning outside a reveal, so seeing either as random
@@ -765,6 +770,17 @@ public class SlotView : MonoBehaviour
             foreach (int flatIndex in landedMysteries) mysteryCells.Add(flatIndex);
         }
 
+        // Captured for the same reason, and one more: the Orb draw happens on each reel's landing
+        // TWEEN completing, which for the last reel lands on the same frame as this sequence's own
+        // onComplete. The controller nulls lastResult a frame or two later, so reading it at draw
+        // time was a race the last reel routinely lost — its Orbs came up bare, with no prize.
+        pendingOrbPrizes.Clear();
+        var landedOrbs = gameManager?.lastResult?.holdAndSpin?.orbPrizes;
+        if (landedOrbs != null)
+        {
+            foreach (var entry in landedOrbs) pendingOrbPrizes[entry.Key] = entry.Value;
+        }
+
         // GameManager.GetSpinDuration() already enforces the minimum spin time before this is
         // ever called, so there's no need for a separate discrete-cycle-count gate here.
         float stagger = isQuickStop ? quickStopStagger : reelStopStagger;
@@ -896,12 +912,6 @@ public class SlotView : MonoBehaviour
 
         SetReelSymbols(columnIndex, targetSymbols, false);
 
-        // Orbs on this reel light up the moment it lands, without waiting for the reels to its
-        // right — an Orb always carries a prize and always animates immediately, in the base game
-        // as much as in the feature. Drawn per column here for exactly that reason; doing it once
-        // at the end of the stop sequence would make every Orb wait for the slowest reel.
-        DrawOrbsForColumn(columnIndex);
-
         // Snap to a fixed pre-land reference point so the overshoot/settle distance below is
         // consistent regardless of where in its continuous loop the reel was stopped.
         slotTransform.localPosition = new Vector3(
@@ -960,6 +970,8 @@ public class SlotView : MonoBehaviour
                     .SetEase(Ease.InOutQuad)
             );
 
+            quickStopSequence.OnComplete(() => DrawOrbsForColumn(columnIndex));
+
             spinTweens[columnIndex] = quickStopSequence;
         }
         else
@@ -976,6 +988,8 @@ public class SlotView : MonoBehaviour
                     {
                         SetAnticipationEffect(columnIndex, false);
                     }
+
+                    DrawOrbsForColumn(columnIndex);
                 });
 
             spinTweens[columnIndex] = stopTween;
@@ -1327,16 +1341,23 @@ public class SlotView : MonoBehaviour
         }
     }
 
-    // The base game's per-reel path, called as each column lands. Reads the spin's prize map the
-    // same way the Mystery override reads its positions — straight off the controller's result,
-    // rather than threading another argument through the whole stop sequence.
+    // The base game's per-reel path, called from the landing tween's OnComplete — NOT from the
+    // symbol write. The write happens the moment the reel is told to stop, but the reel then takes
+    // stopDuration to overshoot and settle into place; drawing here would put a fully formed Orb,
+    // prize and all, on the layer above a symbol still sliding down to meet it.
+    //
+    // Still per column rather than once at the end, so an Orb on reel 1 lights the moment reel 1
+    // settles instead of waiting for reel 5.
+    //
+    // Reads pendingOrbPrizes, captured at the top of the stop sequence — NOT the controller's
+    // lastResult, which is cleared before the last reel's tween finishes.
     //
     // Only runs outside a round: during Hold & Spin the column reels never stop, because they never
     // started, and held Orbs are drawn one at a time by the feature view instead.
     private void DrawOrbsForColumn(int columnIndex)
     {
-        var orbPrizes = gameManager?.lastResult?.holdAndSpin?.orbPrizes;
-        if (orbPrizes == null || orbPrizes.Count == 0) return;
+        var orbPrizes = pendingOrbPrizes;
+        if (orbPrizes.Count == 0) return;
 
         if (orbLayerRoot != null) orbLayerRoot.SetActive(true);
 

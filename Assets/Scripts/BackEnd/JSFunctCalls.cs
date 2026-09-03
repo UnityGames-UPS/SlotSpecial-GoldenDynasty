@@ -19,18 +19,12 @@ public class JSFunctCalls : MonoBehaviour
   [DllImport("__Internal")]
   private static extern void RegisterVisibilityChangeListener(string gameObjectName);
 
-  [DllImport("__Internal")]
-  private static extern void RegisterResizeListener(string gameObjectName, string methodName);
-
-  [DllImport("__Internal")]
-  private static extern void RegisterTokenListener(string gameObjectName, string methodName);
   #endregion
 
   #region Unity Lifecycle
   // Start, not Awake: OrientationChange's Awake must run before the initial dimensions callback.
   private void Start()
   {
-    RegisterDimensionsListener();
   }
   #endregion
 
@@ -92,32 +86,6 @@ public class JSFunctCalls : MonoBehaviour
         RegisterVisibilityChangeListener(gameObjectName);
 #else
     Debug.Log("[JS] Visibility listener not registered (editor mode)");
-#endif
-  }
-
-  /// <summary>
-  /// Self-contained resize bridge: the page drives OC.SwitchDisplay("width,height") on its own resize.
-  /// </summary>
-  internal void RegisterDimensionsListener(string gameObjectName = "OC", string methodName = "SwitchDisplay")
-  {
-#if UNITY_WEBGL && !UNITY_EDITOR
-        Debug.Log($"[JS] Registering resize listener on '{gameObjectName}.{methodName}'");
-        RegisterResizeListener(gameObjectName, methodName);
-#else
-    Debug.Log($"[JS] Resize listener not registered ('{gameObjectName}.{methodName}', editor mode)");
-#endif
-  }
-
-  /// <summary>
-  /// Inbound auth: routes the host's "TokenReceived" message to gameObjectName.methodName(json).
-  /// </summary>
-  internal void RegisterAuthTokenListener(string gameObjectName, string methodName = "ReceiveAuthToken")
-  {
-#if UNITY_WEBGL && !UNITY_EDITOR
-        Debug.Log($"[JS] Registering auth token listener on '{gameObjectName}.{methodName}'");
-        RegisterTokenListener(gameObjectName, methodName);
-#else
-    Debug.Log($"[JS] Token listener not registered ('{gameObjectName}.{methodName}', editor mode)");
 #endif
   }
   #endregion
