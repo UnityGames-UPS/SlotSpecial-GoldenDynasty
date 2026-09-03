@@ -30,6 +30,14 @@ public class SlotView : MonoBehaviour
     [SerializeField] private Sprite spriteJ;                  // ID: 11 (low — "Jack")
     [SerializeField] private Sprite sprite10;                 // ID: 12 (low — "Ten")
 
+    // Deliberately NOT part of the id-keyed table above and NOT in BuildSymbolSpriteArray: this has
+    // no symbol id, the server can never send it, and it is never a spin result. It is the empty
+    // cell backing, used only where something has to occupy a slot without being a symbol — today
+    // that is Hold & Spin's held cells, which sit behind the Orb layer and must not show a symbol
+    // of their own through its transparent corners.
+    [Tooltip("The \"Empty\" sprite — an empty cell, not a symbol. Drawn behind held Orbs during Hold & Spin.")]
+    [SerializeField] private Sprite spriteEmpty;
+
     // Rect size for symbols whose art is drawn at 1.5x against the 175 pitch.
     private static readonly Vector2 LargeSymbolSize = new Vector2(262.5f, 262.5f);
 
@@ -251,6 +259,13 @@ public class SlotView : MonoBehaviour
     // currentDisplayMatrix, and in each reel's displayImages list. The Sizzling-era
     // totalResponseRowCount / ActiveRowStart pair that translated between those spaces is gone.
     internal int RowCount => (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.rowCount : 3;
+
+    // The Orb's symbol id, or -1 before init. Read wherever an Orb has to be drawn with no matrix
+    // entry to take it from — the Orb layer, the feature's filler pool, and Hold & Spin's held
+    // cells, which are frozen rather than landed and so never receive a symbol from a spin.
+    internal int OrbSymbolId => (gameManager != null && gameManager.gameConfig != null)
+        ? gameManager.gameConfig.orbSymbolId
+        : -1;
 
     #region Initialization
 
@@ -611,7 +626,7 @@ public class SlotView : MonoBehaviour
     {
         if (fillerSymbolIds != null) return;
 
-        int orbSymbolId = (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.orbSymbolId : -1;
+        int orbSymbolId = OrbSymbolId;
         int mysterySymbolId = (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.mysterySymbolId : -1;
 
         fillerSymbolIds = new List<int>(SymbolCount);
@@ -1390,7 +1405,7 @@ public class SlotView : MonoBehaviour
         OrbSlot slot = ResolveOrbSlot(flatIndex);
         if (slot?.image == null) return;
 
-        int orbId = gameManager?.gameConfig != null ? gameManager.gameConfig.orbSymbolId : -1;
+        int orbId = OrbSymbolId;
         if (orbId < 0) return;
 
         Image slotImage = slot.image;
@@ -1464,6 +1479,17 @@ public class SlotView : MonoBehaviour
         ApplySymbol(image, symbolId);
     }
 
+    // Writes the empty-cell sprite. Not routed through ApplySymbol because that is keyed by symbol
+    // id and this has none — it sizes to the normal pitch, which is what an empty cell should be
+    // whatever symbol was there before.
+    internal void WriteEmptySymbol(Image image)
+    {
+        if (image == null) return;
+
+        image.sprite = spriteEmpty;
+        image.rectTransform.sizeDelta = normalSymbolSize;
+    }
+
     // The ids a Hold & Spin cell may scroll through: the base filler pool plus Orb. Orbs are what
     // the player is spinning for, so seeing them sweep past is part of the tension — unlike the
     // base game, where an Orb in the buffer would be showing a prize-less Orb the server never
@@ -1474,7 +1500,7 @@ public class SlotView : MonoBehaviour
 
         var ids = new List<int>(fillerSymbolIds);
 
-        int orbId = gameManager?.gameConfig != null ? gameManager.gameConfig.orbSymbolId : -1;
+        int orbId = OrbSymbolId;
         if (orbId >= 0 && !ids.Contains(orbId)) ids.Add(orbId);
 
         return ids;

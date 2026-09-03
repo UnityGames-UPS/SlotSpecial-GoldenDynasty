@@ -29,8 +29,8 @@ public class HoldAndSpinView : MonoBehaviour
     [Tooltip("Root of the fifteen cell reels. Activated for the round; the column reels hide behind it.")]
     [SerializeField] private GameObject cellLayerRoot;
 
-    [Tooltip("The fifteen cells, indexed row * 5 + col. Element 0 = row 0 / col 0, element 14 = row 2 / col 4 — the same flat index space WinLine.positions and mysteryPositions use.")]
-    [SerializeField] private HoldAndSpinCell[] cells = new HoldAndSpinCell[15];
+    [Tooltip("One entry per reel column, each holding the 3 row cells top to bottom. Same shape as the win, Mystery and Orb layers — wire it column by column, matching the hierarchy.")]
+    [SerializeField] private List<HoldAndSpinCellColumn> cellColumns = new List<HoldAndSpinCellColumn>(5);
 
     [Header("Trigger Presentation")]
     [Tooltip("Full-screen animation played once the triggering Orbs have held. Deactivated again when it finishes.")]
@@ -41,10 +41,12 @@ public class HoldAndSpinView : MonoBehaviour
     [SerializeField] private CanvasGroup pressStartFeatureGroup;
 
     [Header("Counters")]
-    [Tooltip("Parent holding both counters during the round. Hidden for the payout.")]
+    [Tooltip("Parent holding the prompt AND the counters. Raised the moment the trigger sequence ends — the prompt lives inside it — and hidden for the payout.")]
     [SerializeField] private GameObject counterPanel;
-    [Tooltip("Orb count. Climbs by one the moment each Orb lands, not once per full stop.")]
+    [Tooltip("Orb count. Climbs by one the moment each Orb lands, not once per full stop. Hidden until Start is pressed.")]
     [SerializeField] private TMPro.TMP_Text orbCountText;
+    [Tooltip("The \"Total 15 Win\" graphic beside the counters. Raised with them when the round starts.")]
+    [SerializeField] private GameObject total15WinGraphic;
     [Tooltip("The respins-remaining graphic. A single static sprite — the number itself goes in spinsRemainingCount below.")]
     [SerializeField] private Image spinsRemainingImage;
     [Tooltip("Respins left in the round. Counts 3 down to 1 and snaps back to 3 the moment an Orb lands.")]
@@ -88,7 +90,7 @@ public class HoldAndSpinView : MonoBehaviour
     [Header("Overlays")]
     [Tooltip("The 'top' parent holding the payout values. Faded out for the round, back in at the end.")]
     [SerializeField] private CanvasGroup topGroup;
-    [Tooltip("Dark overlay behind the Winner panel.")]
+    [Tooltip("Blackout used to hide the board changing back at the very end. NOT a backdrop for the payout — that plays over the live feature board. Goes to FULL alpha, so it needs to cover everything except the red holder.")]
     [SerializeField] private CanvasGroup darkOverlayGroup;
 
     // Deliberately NOT [SerializeField], matching FreeGameView and SlotView: serialized values are
@@ -99,7 +101,10 @@ public class HoldAndSpinView : MonoBehaviour
     private const float promptPulseDuration = 0.7f;
     private const float cellStopStagger = 0.08f;
     private const float overlayFadeDuration = 0.5f;
-    private const float darkOverlayAlpha = 0.75f;
+    // The closing blackout, kept separate from overlayFadeDuration so it can be paced on its own.
+    // Slower on purpose: it is the beat that ends the feature, and at half a second it read as a
+    // flicker rather than a transition.
+    private const float blackoutFadeDuration = 1.2f;
     private const float payoutHoldBeforeCountUp = 0.4f;
     private const float payoutCountUpDuration = 2.0f;
     private const float redPulseDuration = 0.6f;        // one half of the cross-fade, effects <-> Win
@@ -123,13 +128,52 @@ public class HoldAndSpinView : MonoBehaviour
     // orbCount, newOrbCount or heldPositions is ever read. See HoldAndSpin.md section 8.
     private readonly HashSet<int> heldCells = new HashSet<int>();
 
+    // The triggering spin's Orbs and their prizes. Kept for the end of the round: the column reels
+    // are still showing that spin's board, so the Orb layer has to be restored to match it rather
+    // than to the round's final held set — those extra Orbs landed on cell reels that are about to
+    // disappear, and their prizes would be left floating over ordinary symbols.
+    private readonly Dictionary<int, double> triggerOrbPrizes = new Dictionary<int, double>();
+
     private void Awake()
     {
-        if (cells == null) return;
-
-        foreach (var cell in cells)
+        foreach (var cell in AllCells())
         {
-            if (cell != null) cell.SetupFromHierarchy();
+            cell.SetupFromHierarchy();
+        }
+    }
+
+    /// <summary>
+    /// The cell at a flat index (row * reelCount + col) — the space orbPrizes, WinLine.positions
+    /// and mysteryPositions all use. Converts into the column-major storage the Inspector holds.
+    /// </summary>
+    private HoldAndSpinCell GetCell(int flatIndex)
+    {
+        if (cellColumns == null || ReelCount <= 0) return null;
+
+        int row = flatIndex / ReelCount;
+        int col = flatIndex % ReelCount;
+
+        if (col < 0 || col >= cellColumns.Count) return null;
+
+        var column = cellColumns[col];
+        if (column?.rows == null || row < 0 || row >= column.rows.Count) return null;
+
+        return column.rows[row];
+    }
+
+    // Every wired cell, in no particular order — for the operations that touch all of them.
+    private IEnumerable<HoldAndSpinCell> AllCells()
+    {
+        if (cellColumns == null) yield break;
+
+        foreach (var column in cellColumns)
+        {
+            if (column?.rows == null) continue;
+
+            foreach (var cell in column.rows)
+            {
+                if (cell != null) yield return cell;
+            }
         }
     }
 
@@ -157,6 +201,7 @@ public class HoldAndSpinView : MonoBehaviour
         if (pressStartFeature != null) pressStartFeature.SetActive(false);
 
         if (counterPanel != null) counterPanel.SetActive(true);
+        SetRoundCountersVisible(true);
         UpdateCounters(spinsRemaining);
 
         onReady?.Invoke();
@@ -169,13 +214,11 @@ public class HoldAndSpinView : MonoBehaviour
     /// </summary>
     internal void StartCellSpin()
     {
-        if (cells == null) return;
-
         List<int> fillerIds = slotView != null ? slotView.GetHoldAndSpinFillerIds() : null;
 
-        foreach (var cell in cells)
+        foreach (var cell in AllCells())
         {
-            if (cell == null || cell.IsLocked) continue;
+            if (cell.IsLocked) continue;
 
             FillCellStrip(cell, fillerIds);
             cell.StartSpin();
@@ -225,17 +268,15 @@ public class HoldAndSpinView : MonoBehaviour
 
         heldCells.Clear();
 
-        if (cells != null)
+        foreach (var cell in AllCells())
         {
-            foreach (var cell in cells)
-            {
-                if (cell != null) cell.ResetCell();
-            }
+            cell.ResetCell();
         }
 
         if (cellLayerRoot != null) cellLayerRoot.SetActive(false);
         if (fullScreenIntro != null) fullScreenIntro.SetActive(false);
         if (pressStartFeature != null) pressStartFeature.SetActive(false);
+        SetRoundCountersVisible(false);
         if (counterPanel != null) counterPanel.SetActive(false);
         if (winnerPanel != null) winnerPanel.SetActive(false);
         if (winnerBlue != null) winnerBlue.SetActive(false);
@@ -261,10 +302,20 @@ public class HoldAndSpinView : MonoBehaviour
         // The Orbs that triggered are the round's starting held set. They are already on the Orb
         // layer from the base-game pass, so adopting them here means their animations carry
         // straight through the trigger without a restart.
+        //
+        // The prizes are kept as well, because the board the base game returns to at the end is
+        // this one — SlotView's display matrix is never written during a round — so the Orb layer
+        // has to be put back to match it. See RestoreBoardForBaseGame.
         heldCells.Clear();
+        triggerOrbPrizes.Clear();
+
         if (orbPrizes != null)
         {
-            foreach (int flatIndex in orbPrizes.Keys) heldCells.Add(flatIndex);
+            foreach (var entry in orbPrizes)
+            {
+                heldCells.Add(entry.Key);
+                triggerOrbPrizes[entry.Key] = entry.Value;
+            }
         }
 
         // 1. Everything sits for a beat. This is the entire trigger cue — there is no anticipation
@@ -286,9 +337,10 @@ public class HoldAndSpinView : MonoBehaviour
         //    frozen in place.
         PrepareCellLayer();
 
-        // 5. Prompt up, payout values out.
-        if (pressStartFeature != null) pressStartFeature.SetActive(true);
-        StartPromptPulse();
+        // 5. Prompt up, payout values out. The panel comes up whole — the prompt is a descendant of
+        //    it, so it cannot be shown without raising the panel first. Only the counters inside
+        //    stay hidden until Start.
+        ShowAwardPrompt();
 
         if (topGroup != null) topGroup.DOFade(0f, overlayFadeDuration);
 
@@ -301,15 +353,58 @@ public class HoldAndSpinView : MonoBehaviour
         if (slotView != null) slotView.SetColumnReelsVisible(false);
         if (cellLayerRoot != null) cellLayerRoot.SetActive(true);
 
-        if (cells == null) return;
+        // The board the column reels are showing right now. The cell layer has to reproduce it
+        // exactly, or the swap from one to the other is a visible jump — every non-Orb position
+        // would flick to whatever filler its strip happened to be authored with.
+        List<List<int>> landedBoard = slotView != null ? slotView.GetCurrentDisplayMatrix() : null;
+        int reelCount = ReelCount;
+        int cellCount = reelCount * RowCount;
 
-        for (int i = 0; i < cells.Length; i++)
+        for (int i = 0; i < cellCount; i++)
         {
-            if (cells[i] == null) continue;
+            HoldAndSpinCell cell = GetCell(i);
+            if (cell == null) continue;
 
-            cells[i].ResetCell();
-            if (heldCells.Contains(i)) cells[i].Freeze();
+            cell.ResetCell();
+
+            if (heldCells.Contains(i))
+            {
+                BlankHeldCell(cell);
+                cell.Freeze();
+                continue;
+            }
+
+            // Not held, so it will spin on the first respin — but until then it has to carry on
+            // showing whatever the trigger spin landed there.
+            int symbolId = ReadMatrix(landedBoard, i % reelCount, i / reelCount);
+            if (symbolId >= 0 && slotView != null)
+            {
+                Image[] strip = cell.StripImages;
+                if (strip != null && strip.Length > 0) slotView.WriteSymbol(strip[0], symbolId);
+            }
         }
+    }
+
+    /// <summary>
+    /// Clears a held cell's visible slot to the empty-cell sprite.
+    ///
+    /// The Orb layer draws the Orb over this cell, and its sprite does not cover the whole rect —
+    /// an Orb is round, so its corners are transparent. Whatever sits underneath shows through
+    /// them, for the entire round, so the cell is blanked rather than left holding a symbol.
+    ///
+    /// Applies to both routes into a hold. A triggering Orb never lands — it is frozen straight out
+    /// of PrepareCellLayer — so it would otherwise keep whatever filler the strip was authored
+    /// with. One landing mid-round would otherwise keep the Orb the matrix gave it, which reads
+    /// better but leaves the two kinds of held cell looking different at the edges.
+    /// </summary>
+    private void BlankHeldCell(HoldAndSpinCell cell)
+    {
+        if (slotView == null || cell == null) return;
+
+        Image[] strip = cell.StripImages;
+        if (strip == null || strip.Length == 0 || strip[0] == null) return;
+
+        slotView.WriteEmptySymbol(strip[0]);
     }
 
     #endregion
@@ -334,7 +429,7 @@ public class HoldAndSpinView : MonoBehaviour
             for (int row = 0; row < rowCount; row++)
             {
                 int flatIndex = row * reelCount + col;
-                HoldAndSpinCell cell = (cells != null && flatIndex < cells.Length) ? cells[flatIndex] : null;
+                HoldAndSpinCell cell = GetCell(flatIndex);
 
                 if (cell == null || cell.IsLocked) continue;
 
@@ -355,6 +450,11 @@ public class HoldAndSpinView : MonoBehaviour
                 {
                     heldCells.Add(flatIndex);
                     cell.Freeze();
+
+                    // Same frame as HoldOrb below, so the Orb layer is up before the cell empties
+                    // — the player never sees the gap between the two.
+                    BlankHeldCell(cell);
+
                     if (slotView != null) slotView.HoldOrb(flatIndex, prize);
                     UpdateCounters(spinsRemaining);
                 }
@@ -408,13 +508,7 @@ public class HoldAndSpinView : MonoBehaviour
         StopPromptPulse();
         if (pressStartFeature != null) pressStartFeature.SetActive(false);
 
-        // 2. Dark overlay behind the Winner panel.
-        if (darkOverlayGroup != null)
-        {
-            darkOverlayGroup.gameObject.SetActive(true);
-            darkOverlayGroup.DOFade(darkOverlayAlpha, overlayFadeDuration);
-        }
-
+        // 2. The payout panel comes up over the live feature board — no overlay behind it.
         if (winnerPanel != null) winnerPanel.SetActive(true);
         SetGroupAlpha(winnerPanelGroup, 1f, true);
 
@@ -450,10 +544,86 @@ public class HoldAndSpinView : MonoBehaviour
 
         if (winnerRedText != null) winnerRedText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
 
-        // 6. Take becomes pressable. GameManager owns the button; OnTakePressed carries on.
+        // 6. Only now does the screen go dark. The overlay is a cover for putting the board back,
+        //    not a backdrop for the payout — it plays over the live feature board. The payout
+        //    values fade back in at the same time.
+        yield return RaiseBlackout();
+
+        // 7. Everything except the red holder reverts while nothing can be seen: the cell layer,
+        //    the Orb layer, the board dressing, the column reels.
+        RestoreBoardForBaseGame();
+
+        // 8. Back out, leaving the red holder alone on a base-game board — still counting its
+        //    animations, still showing the total.
+        yield return LowerBlackout();
+
+        // 9. Take becomes pressable, and it now has only the red holder left to clear. GameManager
+        //    owns the button; OnTakePressed carries on.
         onCountUpComplete?.Invoke();
 
         activeSequence = null;
+    }
+
+    // Full alpha, not a tint: this has to hide the board completely while it changes back.
+    private IEnumerator RaiseBlackout()
+    {
+        // Same duration as the blackout, so the two genuinely move together rather than one
+        // trailing the other.
+        if (topGroup != null)
+        {
+            topGroup.gameObject.SetActive(true);
+            topGroup.DOFade(1f, blackoutFadeDuration);
+        }
+
+        if (darkOverlayGroup == null)
+        {
+            // Unwired: the reverts still have to happen, they are just not hidden.
+            yield return new WaitForSeconds(blackoutFadeDuration);
+            yield break;
+        }
+
+        darkOverlayGroup.gameObject.SetActive(true);
+        yield return darkOverlayGroup.DOFade(1f, blackoutFadeDuration).WaitForCompletion();
+    }
+
+    private IEnumerator LowerBlackout()
+    {
+        if (darkOverlayGroup == null) yield break;
+
+        yield return darkOverlayGroup.DOFade(0f, blackoutFadeDuration).WaitForCompletion();
+        darkOverlayGroup.gameObject.SetActive(false);
+    }
+
+    /// <summary>
+    /// Puts the board back to its base-game state, leaving the payout alone.
+    ///
+    /// Deliberately narrower than ResetToDefault: this runs behind the blackout, BEFORE the player
+    /// has taken the win, so the red holder and its animations have to survive it. ResetToDefault
+    /// then clears those on the Take press.
+    /// </summary>
+    private void RestoreBoardForBaseGame()
+    {
+        foreach (var cell in AllCells())
+        {
+            cell.ResetCell();
+        }
+
+        heldCells.Clear();
+
+        if (cellLayerRoot != null) cellLayerRoot.SetActive(false);
+        if (fullScreenIntro != null) fullScreenIntro.SetActive(false);
+
+        RestoreBoardDressing();
+
+        if (slotView != null)
+        {
+            slotView.SetColumnReelsVisible(true);
+
+            // Rebuilt to match the board coming back, NOT cleared. Those reels still hold the
+            // triggering spin's Orbs, and an Orb without its prize on it is not something this
+            // game ever shows.
+            slotView.ApplyOrbLayer(triggerOrbPrizes);
+        }
     }
 
     private void ShowWinnerBlue(double roundWin)
@@ -610,6 +780,34 @@ public class HoldAndSpinView : MonoBehaviour
 
     #region Prompt pulse
 
+    /// <summary>
+    /// The state between the trigger sequence ending and Start being pressed: the counter panel is
+    /// up, but showing only the pulsing prompt.
+    ///
+    /// The panel has to be raised here rather than at Start, because the prompt sits inside it —
+    /// leaving the panel off would leave the prompt off with it, however active the prompt's own
+    /// object is.
+    /// </summary>
+    private void ShowAwardPrompt()
+    {
+        if (counterPanel != null) counterPanel.SetActive(true);
+
+        SetRoundCountersVisible(false);
+
+        if (pressStartFeature != null) pressStartFeature.SetActive(true);
+        StartPromptPulse();
+    }
+
+    // Everything that belongs to a running round rather than the prompt. Off while the player is
+    // being asked to press Start, on for the rest of the round.
+    private void SetRoundCountersVisible(bool visible)
+    {
+        if (orbCountText != null) orbCountText.gameObject.SetActive(visible);
+        if (total15WinGraphic != null) total15WinGraphic.SetActive(visible);
+        if (spinsRemainingImage != null) spinsRemainingImage.gameObject.SetActive(visible);
+        if (spinsRemainingCount != null) spinsRemainingCount.gameObject.SetActive(visible);
+    }
+
     private void StartPromptPulse()
     {
         if (pressStartFeatureGroup == null) return;
@@ -649,10 +847,9 @@ public class HoldAndSpinView : MonoBehaviour
     /// </summary>
     private void UpdateCounters(int spinsRemaining)
     {
+        // Values only — what is visible is owned by SetRoundCountersVisible, so this cannot
+        // accidentally raise a counter during the award prompt.
         if (orbCountText != null) orbCountText.text = heldCells.Count.ToString();
-
-        // The graphic is a static sprite; only the number beside it changes.
-        if (spinsRemainingImage != null) spinsRemainingImage.gameObject.SetActive(true);
         if (spinsRemainingCount != null) spinsRemainingCount.text = Mathf.Max(0, spinsRemaining).ToString();
     }
 
@@ -704,7 +901,7 @@ public class HoldAndSpinView : MonoBehaviour
     // once, then let the round run without its presentation rather than stalling the game loop.
     private bool HasRequiredRefs()
     {
-        if (cells != null && cells.Length > 0 && slotView != null) return true;
+        if (cellColumns != null && cellColumns.Count > 0 && slotView != null) return true;
 
         if (!missingRefsLogged)
         {

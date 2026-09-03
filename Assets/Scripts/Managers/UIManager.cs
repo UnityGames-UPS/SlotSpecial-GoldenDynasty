@@ -17,7 +17,6 @@ public class UIManager : MonoBehaviour
 
     [Header("Loading & Intro")]
     [SerializeField] private GameObject gameScreen;
-    [SerializeField] private GameObject gameLogoObject;
 
 
 
@@ -1181,13 +1180,12 @@ public class UIManager : MonoBehaviour
 
     internal void SetSpinButtonMode(SpinButtonMode mode, bool interactable = true)
     {
-        if (mode == SpinButtonMode.FreeGamesStart)
+        // Returning to Spin means a round is over, so the win box goes back to GOOD LUCK. This used
+        // to sit alongside a show/hide of a game logo left over from Sizzling 7s — Golden Dynasty
+        // has no such object, and only Free Games ever hid it, so Hold & Spin ending on Spin mode
+        // switched an authored-off object on and left it on.
+        if (mode == SpinButtonMode.Spin)
         {
-            if (gameLogoObject) gameLogoObject.SetActive(false);
-        }
-        else if (mode == SpinButtonMode.Spin)
-        {
-            if (gameLogoObject) gameLogoObject.SetActive(true);
             UpdateWinDisplay(0);
         }
 

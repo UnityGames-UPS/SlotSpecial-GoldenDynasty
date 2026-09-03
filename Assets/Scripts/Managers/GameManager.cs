@@ -983,8 +983,11 @@ public class GameManager : MonoBehaviour
     {
         holdSpinRoundWin = 0;
 
+        // The Orb layer is deliberately NOT cleared here. The board the player is handed back still
+        // shows the triggering spin's Orbs, and an Orb has to carry its prize — the view rebuilt
+        // the layer to match that board behind the blackout. It clears on its own on the next spin,
+        // through SlotView's DisableAllOverlays.
         if (holdAndSpinView != null) holdAndSpinView.ResetToDefault();
-        if (slotView != null) slotView.ClearOrbLayer();
 
         uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.Spin);
         uiManager.SetFreeGamesButtonLock(false);
