@@ -1495,6 +1495,15 @@ public class SlotView : MonoBehaviour
         imageAnim.StartAnimation();
     }
 
+    // Where an Orb is drawn on screen, for the Hold & Spin payout walk to launch a dragon from.
+    // Null when the layer is unwired or the index is off the grid — the caller adds the prize
+    // anyway and skips the flight, so a missing rect costs a visual, never the total.
+    internal RectTransform GetOrbSlotRect(int flatIndex)
+    {
+        OrbSlot slot = ResolveOrbSlot(flatIndex);
+        return slot?.image != null ? slot.image.rectTransform : null;
+    }
+
     private OrbSlot ResolveOrbSlot(int flatIndex)
     {
         if (orbSlotColumns == null || ReelCount <= 0) return null;

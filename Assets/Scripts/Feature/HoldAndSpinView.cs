@@ -78,6 +78,9 @@ public class HoldAndSpinView : MonoBehaviour
     [Tooltip("Parent of the \"Win\" graphics. Pulses in OPPOSITE phase to the effects above — at 1 when they are at 0.")]
     [SerializeField] private CanvasGroup winnerRedWinGroup;
 
+    [Tooltip("The FlyingDragon under EffectsLayer — inactive, with Emitting OFF. ONE object, reused for every Orb. Leave it empty and the payout falls back to writing the total straight into Blue.")]
+    [SerializeField] private DragonFlyer dragon;
+
     [Header("Board Dressing")]
     [Tooltip("The SlotShed's Image. NOT sprite-swapped — the same object stays at the same size and only its colour changes.")]
     [SerializeField] private Image slotShedImage;
@@ -108,6 +111,10 @@ public class HoldAndSpinView : MonoBehaviour
     private const float payoutHoldBeforeCountUp = 0.4f;
     private const float payoutCountUpDuration = 2.0f;
     private const float redPulseDuration = 0.6f;        // one half of the cross-fade, effects <-> Win
+    // Orb to Blue, per dragon. The path's SHAPE is not here — that is serialized on DragonFlyer, so
+    // it can be tuned alongside the ribbon. Nor is the gap between dragons: that is the ribbon's own
+    // fade time, owned and waited on by the flyer.
+    private const float dragonFlightDuration = 0.6f;
 
     private Coroutine activeSequence;
     private Tween promptPulseTween;
@@ -243,11 +250,12 @@ public class HoldAndSpinView : MonoBehaviour
     /// built it will need each held Orb's screen position, which means exposing the Orb layer's
     /// slot rects from SlotView; heldCells already carries the indices to ask for.
     /// </summary>
-    internal void PlayOutro(double roundWin, Action onCountUpComplete, Action onComplete)
+    internal void PlayOutro(double roundWin, Dictionary<int, double> orbPrizes,
+                            Action onCountUpComplete, Action onComplete)
     {
         StopActiveSequence();
         pendingTakeCallback = onComplete;
-        activeSequence = StartCoroutine(OutroRoutine(roundWin, onCountUpComplete));
+        activeSequence = StartCoroutine(OutroRoutine(roundWin, orbPrizes, onCountUpComplete));
     }
 
     /// <summary>Take was pressed. Fires whatever PlayOutro was given as its completion callback.</summary>
@@ -265,6 +273,15 @@ public class HoldAndSpinView : MonoBehaviour
         StopPromptPulse();
         StopRedPulse();
         StopPayoutAnimations();
+
+        // A flight is a DOTween tween, not a coroutine, so StopActiveSequence does NOT stop it — a
+        // dragon would carry on writing its position every frame, flying to a panel that has just
+        // been switched off. It has to be cancelled explicitly.
+        if (dragon != null)
+        {
+            dragon.CancelFlight();
+            dragon.gameObject.SetActive(false);
+        }
 
         heldCells.Clear();
 
@@ -501,7 +518,7 @@ public class HoldAndSpinView : MonoBehaviour
 
     #region Outro
 
-    private IEnumerator OutroRoutine(double roundWin, Action onCountUpComplete)
+    private IEnumerator OutroRoutine(double roundWin, Dictionary<int, double> orbPrizes, Action onCountUpComplete)
     {
         // 1. The counters go; the payout owns the screen from here.
         if (counterPanel != null) counterPanel.SetActive(false);
@@ -512,18 +529,18 @@ public class HoldAndSpinView : MonoBehaviour
         if (winnerPanel != null) winnerPanel.SetActive(true);
         SetGroupAlpha(winnerPanelGroup, 1f, true);
 
-        // 3. Blue: the running total. Its per-Orb walk is not built yet, so the figure is written
-        //    straight to the finished total — which is exactly where the walk ends up, so adding it
-        //    later replaces one assignment and disturbs nothing else here.
-        ShowWinnerBlue(roundWin);
+        // 3. Blue starts EMPTY. The walk fills it, one Orb at a time.
+        ShowWinnerBlue(0);
 
-        yield return new WaitForSeconds(payoutHoldBeforeCountUp);
+        // 4. The walk: a dragon from every held Orb, in turn. Ends with Blue showing the full total,
+        //    which is where the old placeholder started it — so everything below is unchanged.
+        yield return WalkRoutine(roundWin, orbPrizes);
 
-        // 4. Red takes over, and only now does the Winner graphic come up. Blue's holder goes with
+        // 5. Red takes over, and only now does the Winner graphic come up. Blue's holder goes with
         //    it — the two are never on screen together.
         ShowWinnerRed();
 
-        // 5. Count up from zero to the same total. The second climb is intentional: the totals
+        // 6. Count up from zero to the same total. The second climb is intentional: the totals
         //    match, but they are different objects in different holders, so nothing visibly drops
         //    back to zero.
         if (winnerRedText != null && roundWin > 0)
@@ -544,20 +561,20 @@ public class HoldAndSpinView : MonoBehaviour
 
         if (winnerRedText != null) winnerRedText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
 
-        // 6. Only now does the screen go dark. The overlay is a cover for putting the board back,
+        // 7. Only now does the screen go dark. The overlay is a cover for putting the board back,
         //    not a backdrop for the payout — it plays over the live feature board. The payout
         //    values fade back in at the same time.
         yield return RaiseBlackout();
 
-        // 7. Everything except the red holder reverts while nothing can be seen: the cell layer,
+        // 8. Everything except the red holder reverts while nothing can be seen: the cell layer,
         //    the Orb layer, the board dressing, the column reels.
         RestoreBoardForBaseGame();
 
-        // 8. Back out, leaving the red holder alone on a base-game board — still counting its
+        // 9. Back out, leaving the red holder alone on a base-game board — still counting its
         //    animations, still showing the total.
         yield return LowerBlackout();
 
-        // 9. Take becomes pressable, and it now has only the red holder left to clear. GameManager
+        // 10. Take becomes pressable, and it now has only the red holder left to clear. GameManager
         //    owns the button; OnTakePressed carries on.
         onCountUpComplete?.Invoke();
 
@@ -626,19 +643,114 @@ public class HoldAndSpinView : MonoBehaviour
         }
     }
 
-    private void ShowWinnerBlue(double roundWin)
+    /// <summary>
+    /// The walk: one dragon per held Orb, in reading order, each carrying its prize to Blue.
+    ///
+    /// Ends with Blue snapped to <paramref name="roundWin"/>. Blue arrives at its figure by adding
+    /// up to fifteen doubles one at a time, while Red counts to the server's already-rounded
+    /// currentWinning — those can differ in the last place, and the player watches the same number
+    /// twice. The snap makes them provably identical.
+    /// </summary>
+    private IEnumerator WalkRoutine(double roundWin, Dictionary<int, double> orbPrizes)
+    {
+        // Nothing to walk with: fall through to the finished total, exactly as the placeholder did.
+        // A round must never stall waiting on a flyer that was never wired.
+        if (dragon == null || orbPrizes == null || orbPrizes.Count == 0 || heldCells.Count == 0)
+        {
+            if (winnerBlueText != null) winnerBlueText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
+            yield return new WaitForSeconds(payoutHoldBeforeCountUp);
+            yield break;
+        }
+
+        // Ascending flat index IS left-to-right then top-to-bottom, since the index is row * 5 + col.
+        // So reading order costs one sort and no extra data — and it is deliberately NOT the landing
+        // order the server sends, because a player scans a board, not a history.
+        var order = new List<int>(heldCells);
+        order.Sort();
+
+        // The view brackets the walk; the flyer only ever knows one flight. Nothing inside the loop
+        // touches the object's active state — that is why arrival hides the head rather than the
+        // GameObject.
+        dragon.gameObject.SetActive(true);
+
+        double running = 0;
+
+        foreach (int flatIndex in order)
+        {
+            if (!orbPrizes.TryGetValue(flatIndex, out double prize)) continue;
+
+            // Read fresh every flight. A RectTransform's world position is not reliable until layout
+            // has run, and Blue was activated moments ago — a position captured once could send the
+            // first dragon somewhere slightly wrong and every later one correctly.
+            RectTransform orbRect = slotView != null ? slotView.GetOrbSlotRect(flatIndex) : null;
+            RectTransform targetRect = winnerBlue != null ? winnerBlue.transform as RectTransform : null;
+
+            // A cell we cannot place still pays. Skipping the prize as well as the flight would
+            // leave Blue ending on a different figure from the one Red climbs to.
+            if (orbRect == null || targetRect == null)
+            {
+                running += prize;
+                if (winnerBlueText != null) winnerBlueText.text = running.ToString(SpriteTextFormatter.MoneyFormat);
+                continue;
+            }
+
+            Vector3 start = orbRect.position;
+            Vector3 end = targetRect.position;
+
+            bool arrived = false;
+            bool ready = false;
+
+            // Only the endpoints. The curve between them is the flyer's own business — its shape
+            // lives on that component, where it can be tuned with the ribbon rather than in code.
+            dragon.Fly(start, end, dragonFlightDuration,
+                       () => arrived = true,
+                       () => ready = true);
+
+            yield return new WaitUntil(() => arrived);
+
+            running += prize;
+            if (winnerBlueText != null) winnerBlueText.text = running.ToString(SpriteTextFormatter.MoneyFormat);
+            PulseWinnerBlue();
+
+            // Waits on the flyer's signal, never on trail.time — the ribbon's length is the flyer's
+            // business, and this only needs to know when it is free again.
+            yield return new WaitUntil(() => ready);
+        }
+
+        dragon.gameObject.SetActive(false);
+
+        if (winnerBlueText != null) winnerBlueText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
+    }
+
+    // One pass of Blue's holder animation, per arrival. Blue punctuates — it reacts to being hit,
+    // then sits idle until the next dragon lands. Red is the one that loops continuously.
+    private void PulseWinnerBlue()
+    {
+        if (winnerBlueAnim == null) return;
+
+        winnerBlueAnim.doLoopAnimation = false;
+        winnerBlueAnim.onLoopComplete = null;
+        winnerBlueAnim.StartAnimation();
+    }
+
+    // startingTotal, not the round win: Blue opens EMPTY and the walk fills it one Orb at a time.
+    private void ShowWinnerBlue(double startingTotal)
     {
         if (winnerRed != null) winnerRed.SetActive(false);
         if (winnerGraphic != null) winnerGraphic.SetActive(false);
 
         if (winnerBlue != null) winnerBlue.SetActive(true);
-        if (winnerBlueText != null) winnerBlueText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
+        if (winnerBlueText != null) winnerBlueText.text = startingTotal.ToString(SpriteTextFormatter.MoneyFormat);
 
+        // Set up for one-shot playback but NOT started here. Blue's animation is the panel reacting
+        // to being hit — one pass per dragon arrival, idle in between — so PulseWinnerBlue drives it
+        // from the walk, not this. Red is the opposite: its animations loop continuously for as long
+        // as it is up. Blue punctuates, Red celebrates.
         if (winnerBlueAnim != null)
         {
-            winnerBlueAnim.doLoopAnimation = true;
+            winnerBlueAnim.doLoopAnimation = false;
             winnerBlueAnim.onLoopComplete = null;
-            winnerBlueAnim.StartAnimation();
+            winnerBlueAnim.StopAnimation();
         }
     }
 

@@ -67,6 +67,12 @@ public class GameManager : MonoBehaviour
     internal int holdSpinRemaining;        // display only — never used to decide the round is over
     internal double holdSpinRoundWin;      // server-authoritative, from features.holdAndSpin
 
+    // Every held Orb and its prize, as of the round's final spin. Kept here rather than cached in
+    // the view: the view receives orbPrizes to render each spin, but retaining it for a different
+    // sequence would leave server data in a view's keeping across a sequence boundary. All the other
+    // round state lives here too, and this rides to the payout alongside holdSpinRoundWin.
+    private Dictionary<int, double> holdSpinOrbPrizes;
+
     internal bool isInitialized;
     internal bool initializationFailed;
 
@@ -578,7 +584,15 @@ public class GameManager : MonoBehaviour
             // They agree, but only currentWinning is rounded — one captured payout arrived as
             // 12.100000000000001 in totalOrbPayout against a clean 12.1 in currentWinning, and it
             // is currentWinning the balance actually moved by. Zero on every spin until the payout.
-            if (isInHoldAndSpin) holdSpinRoundWin = result.winAmount;
+            if (isInHoldAndSpin)
+            {
+                holdSpinRoundWin = result.winAmount;
+
+                // Captured every spin, so whatever the last one carried is what the payout walk
+                // gets. Prizes are frozen once an Orb lands, so the final map holds every held Orb
+                // at the value the server computed the total from.
+                holdSpinOrbPrizes = result.holdAndSpin.orbPrizes;
+            }
         }
     }
 
@@ -957,6 +971,7 @@ public class GameManager : MonoBehaviour
     private void EndHoldAndSpin()
     {
         double roundWin = holdSpinRoundWin;
+        var orbPrizes = holdSpinOrbPrizes;
 
         // Cleared before the outro so the win box stops being suppressed and the balance display
         // behaves normally again while the payout counts up.
@@ -967,7 +982,7 @@ public class GameManager : MonoBehaviour
 
         if (holdAndSpinView != null)
         {
-            holdAndSpinView.PlayOutro(roundWin, OnHoldSpinCountUpComplete, OnHoldSpinOutroComplete);
+            holdAndSpinView.PlayOutro(roundWin, orbPrizes, OnHoldSpinCountUpComplete, OnHoldSpinOutroComplete);
         }
         else
         {
@@ -986,6 +1001,7 @@ public class GameManager : MonoBehaviour
     private void OnHoldSpinOutroComplete()
     {
         holdSpinRoundWin = 0;
+        holdSpinOrbPrizes = null;
 
         // The Orb layer is deliberately NOT cleared here. The board the player is handed back still
         // shows the triggering spin's Orbs, and an Orb has to carry its prize — the view rebuilt
