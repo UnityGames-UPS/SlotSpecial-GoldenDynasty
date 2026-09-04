@@ -46,6 +46,10 @@ public class FreeGameView : MonoBehaviour
     [SerializeField] private GameObject freeGamesOver;
     [SerializeField] private CanvasGroup freeGamesOverGroup;
     [SerializeField] private TMPro.TMP_Text freeGamesWinAmount;
+    [Tooltip("Optional clip on the summary graphic. Started when the summary appears and stopped " +
+             "when it fades. Its frames, speed and loop flag are the component's own — unlike the " +
+             "symbol animations, the code does not own this clip and only starts and stops it.")]
+    [SerializeField] private ImageAnimation freeGamesOverAnim;
 
     [Header("Overlays")]
     [Tooltip("The 'top' parent holding the payout values. Faded to 0 and back during the closing sequence.")]
@@ -173,6 +177,8 @@ public class FreeGameView : MonoBehaviour
         if (counterTween != null) { counterTween.Kill(); counterTween = null; }
         if (totalWinTween != null) { totalWinTween.Kill(); totalWinTween = null; }
 
+        if (freeGamesOverAnim != null) freeGamesOverAnim.StopAnimation();
+
         ShowPanelState(prompt: false, remaining: false, completed: false);
         if (freeGamesTexts != null) freeGamesTexts.SetActive(false);
         if (freeGamesOver != null) freeGamesOver.SetActive(false);
@@ -294,9 +300,12 @@ public class FreeGameView : MonoBehaviour
         ShowPanelState(prompt: false, remaining: false, completed: true);
         SetGroupAlpha(freeGamesTextsGroup, 1f, true);
 
-        // 4. FreeGamesOver appears.
+        // 4. FreeGamesOver appears, and its clip starts with it. Started explicitly rather than
+        //    left to the component's StartOnEnable, so the sequence owns the timing and a change
+        //    to that checkbox cannot silently turn the animation off.
         if (freeGamesOver != null) freeGamesOver.SetActive(true);
         SetGroupAlpha(freeGamesOverGroup, 1f, true);
+        if (freeGamesOverAnim != null) freeGamesOverAnim.StartAnimation();
         if (freeGamesWinAmount != null) freeGamesWinAmount.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
 
         yield return new WaitForSeconds(summaryHoldBeforeCountUp);
@@ -345,6 +354,10 @@ public class FreeGameView : MonoBehaviour
         else if (counterOut != null) yield return counterOut.WaitForCompletion();
         else if (overlayOut != null) yield return overlayOut.WaitForCompletion();
         else yield return new WaitForSeconds(overlayFadeDuration);
+
+        // Stopped explicitly: ImageAnimation drives itself with Invoke, so deactivating the object
+        // is not a reliable way to end a looping clip.
+        if (freeGamesOverAnim != null) freeGamesOverAnim.StopAnimation();
 
         if (freeGamesOver != null) freeGamesOver.SetActive(false);
         ShowPanelState(prompt: false, remaining: false, completed: false);

@@ -724,10 +724,15 @@ public class UIManager : MonoBehaviour
             return;
         }
 
+        // Free spins show the ordinary Spin button, greyed out, for the whole round — never Stop.
+        // Stop would imply the player can interrupt a spin they did not start and cannot stop, and
+        // the round used to sit on a disabled Start button instead, which read as though it were
+        // still waiting to be pressed.
         SpinButtonMode mode;
-        if (gameManager != null && gameManager.isAutoPlaying) mode = SpinButtonMode.AutoplayStop;
-        else if (isSpinningState)                            mode = SpinButtonMode.Stop;
-        else                                                 mode = SpinButtonMode.Spin;
+        if (gameManager != null && gameManager.isAutoPlaying)  mode = SpinButtonMode.AutoplayStop;
+        else if (gameManager != null && gameManager.isInFreeSpins) mode = SpinButtonMode.Spin;
+        else if (isSpinningState)                             mode = SpinButtonMode.Stop;
+        else                                                  mode = SpinButtonMode.Spin;
 
         ApplySpinButtonState(mode, isInteractable);
     }
@@ -912,7 +917,7 @@ public class UIManager : MonoBehaviour
     /// leaves the hover/pressed/disabled art on whatever the scene baked in, which is how the speed
     /// button ended up showing Normal's hover graphic while in Turbo or QuickSpin.
     /// </summary>
-    private void ApplyButtonSprites(Button button, ButtonSpriteSet set)
+    private void ApplyButtonSprites(Button button, ButtonSpriteSet set, bool interactable = true)
     {
         if (button == null || set == null) return;
 
@@ -925,8 +930,16 @@ public class UIManager : MonoBehaviour
             // from a click — so the pointer is still over the button and the old mode's hover
             // sprite would stay on screen until it left. Clearing it shows the new mode's idle art
             // immediately; Unity re-applies the correct hover on the next pointer event.
-            img.overrideSprite = null;
             img.sprite = set.normal;
+
+            // A disabled button needs its disabled art stamped on here rather than left to Unity.
+            // Sprite Swap only applies a state sprite on a state TRANSITION, and Selectable's
+            // interactable setter is guarded — assigning false to a button that is already false
+            // does nothing. Free spins hit that on every spin: the button is already disabled, this
+            // clears overrideSprite, nothing transitions, and the normal sprite is what stays on
+            // screen. Writing it directly makes the call idempotent instead of depending on a
+            // transition that may never fire.
+            img.overrideSprite = (!interactable && set.disabled != null) ? set.disabled : null;
         }
 
         // spriteState is a struct property: mutating its fields in place does nothing, the whole
@@ -1212,11 +1225,12 @@ public class UIManager : MonoBehaviour
             default:                            set = spinSprites; break;
         }
 
-        // ApplyButtonSprites clears overrideSprite before writing. Without that the art stays
-        // whatever Unity's last Sprite Swap transition stamped on — which is why the Take button
-        // used to stay invisible until the player clicked it.
-        ApplyButtonSprites(spinButton, set);
-        ApplyButtonSprites(spinButtonPortrait, set);
+        // ApplyButtonSprites rewrites overrideSprite every time. Without that the art stays whatever
+        // Unity's last Sprite Swap transition stamped on — which is why the Take button used to
+        // stay invisible until the player clicked it — and passing interactable through is what
+        // puts the disabled art on when the button is going out of service.
+        ApplyButtonSprites(spinButton, set, interactable);
+        ApplyButtonSprites(spinButtonPortrait, set, interactable);
 
         SetButtonInteractable(spinButton, spinButtonPortrait, interactable);
 

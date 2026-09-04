@@ -808,7 +808,11 @@ public class GameManager : MonoBehaviour
     // counter, the total counts up from 0, and the first spin follows.
     internal void StartFirstFreeSpin()
     {
-        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.FreeGamesStart, interactable: false);
+        // Off FreeGamesStart and onto plain Spin, disabled. Two reasons: the round should show the
+        // ordinary Spin button greyed out rather than a Start button that has already been pressed,
+        // and FreeGamesStart is an "explicit" mode that SetSpinStopButtonStates refuses to touch —
+        // so leaving it set would freeze the button's art for the whole round.
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.Spin, interactable: false);
 
         if (freeGameView == null)
         {

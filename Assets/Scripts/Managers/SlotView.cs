@@ -53,7 +53,9 @@ public class SlotView : MonoBehaviour
         { 0, new Vector2(200f, 200f) },  // Wild
         { 4, LargeSymbolSize },          // Warriors
         { 5, new Vector2(210f, 210f) },  // Lady
-        { 7, LargeSymbolSize }           // Drum
+        { 7, LargeSymbolSize },          // Drum
+        { 1, LargeSymbolSize },           // Scatter
+        { 3, new Vector2(200f, 200f) }   // Mystery
     };
 
     // Playback speed per symbol, applied wherever that symbol's clip is assigned.
@@ -73,14 +75,14 @@ public class SlotView : MonoBehaviour
     private static readonly Dictionary<int, float> SymbolAnimationSpeeds = new Dictionary<int, float>
     {
         { 0,  25f },  // Wild
-        { 1,  20f },  // Scatter
+        { 1,  90f },  // Scatter
         { 2,  20f },  // Orb
-        { 3,  20f },  // Mystery
+        { 3,  35f },  // Mystery
         { 4,  25f },  // Warriors
         { 5,  25f },  // Lady
         { 6,  20f },  // Book
         { 7,  50f },  // Drum
-        { 8,  15f },  // A
+        { 8,  10f },  // A
         { 9,  15f },  // K
         { 10, 15f },  // Q
         { 11, 15f },  // J
@@ -1064,20 +1066,31 @@ public class SlotView : MonoBehaviour
         }
     }
 
+    // Plays one symbol's clip on the ANIMATION LAYER, the same surface AnimateWinPositions uses.
+    //
+    // This used to drive reel.displayImages[row] directly. Two costs came with that: every display
+    // icon needed its own ImageAnimation, added per-instance as a prefab override because
+    // SlotIcon.prefab carries none — so reverting one override silently killed the animation with
+    // no warning — and the clip played on the reel itself, below the win dim, where a dim held by a
+    // Mystery reveal would leave the scatters dark for the whole trigger sequence.
+    //
+    // The dim is deliberately NOT raised here. AnimateAllScatters opens with KillWinTweens, which
+    // lowers it, and the scatter trigger is meant to play over a normal board rather than a
+    // darkened one.
     private void AnimateSymbolSingleLoop(int column, int row, int loopCount = 1)
     {
-        if (column >= reelImagesList.Count) return;
+        if (currentDisplayMatrix == null) return;
+        if (column < 0 || column >= ReelCount || row < 0 || row >= RowCount) return;
+        if (column >= currentDisplayMatrix.Count || row >= currentDisplayMatrix[column].Count) return;
 
-        var reel = reelImagesList[column];
-        if (reel.displayImages == null) return;
+        if (animSlotColumns == null || column >= animSlotColumns.Count) return;
+        var slotColumn = animSlotColumns[column];
+        if (slotColumn == null || slotColumn.rows == null || row >= slotColumn.rows.Count) return;
 
-        int displayIndex = row;
-        if (displayIndex >= reel.displayImages.Count) return;
+        AnimSlot slot = slotColumn.rows[row];
+        if (slot == null || slot.image == null) return;
 
-        Image symbolImage = reel.displayImages[displayIndex];
-        if (symbolImage == null) return;
-
-        ImageAnimation imageAnim = symbolImage.GetComponent<ImageAnimation>();
+        ImageAnimation imageAnim = slot.animation;
         if (imageAnim == null) return;
 
         int symbolId = currentDisplayMatrix[column][row];
@@ -1086,19 +1099,38 @@ public class SlotView : MonoBehaviour
         List<Sprite> animSprites = animationSpriteArrays[symbolId];
         if (animSprites == null || animSprites.Count == 0) return;
 
+        Image symbolImage = slot.image;
+
+        // Draw the symbol on the layer and take the reel icon out from under it — otherwise the
+        // resting icon shows through as a ghost, and an oversized neighbour can poke into the cell.
+        // HideWinSlots puts every icon back when the layer comes down.
+        symbolImage.DOKill();
+        ApplySymbol(symbolImage, symbolId);
+        symbolImage.transform.localScale = Vector3.one;
+        Color c = symbolImage.color;
+        symbolImage.color = new Color(c.r, c.g, c.b, 1f);
+        symbolImage.gameObject.SetActive(true);
+        SetDisplayIconActive(column, row, false);
+
+        // The dim goes up with the layer. The animation layer is meant to be read against a
+        // darkened board — that pairing is what makes a symbol pop — and AnimateAllScatters lowers
+        // the dim on its way in via KillWinTweens, so raising it here is what puts it back.
+        //
+        // It stays up for the whole wait: the hold, the prompt appearing, and however long the
+        // player takes to press Start. DisableAllOverlays on the first free spin takes it down.
+        if (winAnimationLayer != null) winAnimationLayer.SetActive(true);
+        if (winDimOverlay != null) winDimOverlay.SetActive(true);
+
         imageAnim.textureArray = animSprites;
+        imageAnim.doLoopAnimation = true;
+        imageAnim.onLoopComplete = null;
+        // Only read inside StartAnimation, and these slots are reused every spin, so an unwritten
+        // speed is whichever symbol used this slot last.
+        imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(symbolId);
 
         Sequence seq = DOTween.Sequence();
 
-        seq.AppendCallback(() => {
-            // ImageAnimation now lives directly on the SlotIcon root, sharing symbolImage —
-            // no separate overlay to activate/fade; just ensure full opacity before playing.
-            symbolImage.DOKill();
-            Color c = symbolImage.color;
-            symbolImage.color = new Color(c.r, c.g, c.b, 1f);
-
-            imageAnim.StartAnimation();
-        });
+        seq.AppendCallback(() => imageAnim.StartAnimation());
 
         // loopCount <= 0 means run indefinitely — skip scheduling the stop entirely and let
         // whatever kills winTweens end it. The only live caller (AnimateAllScatters, via the
@@ -1571,6 +1603,49 @@ public class SlotView : MonoBehaviour
     {
         int rowLimit = (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.rowCount : 3;
 
+        // Was a feature triggered on this spin? Computed up here rather than between the phases,
+        // because it now decides whether EITHER phase runs.
+        //
+        // A retrigger (spinsAwarded during a free spin) is deliberately not counted: the round is
+        // already running and has no separate trigger sequence to make way for.
+        bool freeGamesTriggered = gameManager != null && gameManager.lastResult != null
+            && gameManager.lastResult.freeGame != null
+            && gameManager.lastResult.freeGame.spinsAwarded
+            && !gameManager.lastResult.freeGame.isFreeGame;
+
+        bool holdAndSpinTriggered = gameManager != null && gameManager.lastResult != null
+            && gameManager.lastResult.holdAndSpin != null
+            && gameManager.lastResult.holdAndSpin.triggered;
+
+        bool hasSpecialFeature = freeGamesTriggered || holdAndSpinTriggered;
+
+        // A triggering spin skips the win presentation entirely and hands straight over to the
+        // feature's own opening — scatters animating for Free Games, the Orb hold for Hold & Spin.
+        //
+        // Phase 2 was already skipped for these; Phase 1 was not, so a trigger that also paid a
+        // line sat through three full loops of its slowest winning symbol first — roughly five
+        // seconds of ordinary win animation before the feature could start. The line still pays and
+        // the balance still moves; it simply gets no animation, because the trigger owns the screen.
+        //
+        // onComplete still fires, so the hand-off through ProcessSpecialFeaturesAfterWin is intact.
+        if (hasSpecialFeature)
+        {
+            winAnimationCoroutine = null;
+
+            // Same asymmetry the Phase 2 skip had, for the same reason: a Free Games trigger is
+            // left alone because AnimateAllScatters immediately does its own KillWinTweens, while
+            // Hold & Spin's trigger never touches the win layer — so a dim held by a Mystery reveal
+            // would sit over the whole feature if it were not released here.
+            if (!freeGamesTriggered)
+            {
+                ReleaseHeldDim();
+                KillWinTweens();
+            }
+
+            onComplete?.Invoke();
+            yield break;
+        }
+
         // ==========================================
         // PHASE 1: Show all winning icons at once
         // ==========================================
@@ -1613,46 +1688,23 @@ public class SlotView : MonoBehaviour
         // Invoke onComplete immediately after Phase 1 so game logic (Free Spins / Autoplay / Win complete) can proceed
         onComplete?.Invoke();
 
-        // Skip Phase 2 if in Free Spins, Autoplay, or if a feature was triggered — the trigger
-        // presentation takes the screen instead, and AnimateAllScatters does its own teardown.
-        // A retrigger (spinsAwarded during a free spin) is deliberately not counted: the round is
-        // already running and has no separate trigger sequence to make way for.
-        bool freeGamesTriggered = gameManager != null && gameManager.lastResult != null
-            && gameManager.lastResult.freeGame != null
-            && gameManager.lastResult.freeGame.spinsAwarded
-            && !gameManager.lastResult.freeGame.isFreeGame;
-
-        // A Hold & Spin trigger takes the screen the same way, and for the same reason: the round's
-        // intro starts as soon as this call's onComplete unwinds, so leaving Phase 2 to run would
-        // cycle win lines underneath the feature for the next twenty seconds.
-        bool holdAndSpinTriggered = gameManager != null && gameManager.lastResult != null
-            && gameManager.lastResult.holdAndSpin != null
-            && gameManager.lastResult.holdAndSpin.triggered;
-
-        bool hasSpecialFeature = freeGamesTriggered || holdAndSpinTriggered;
-
-        bool skipPhase2 = (gameManager != null && (gameManager.isInFreeSpins || gameManager.isInHoldAndSpin || gameManager.isAutoPlaying)) || hasSpecialFeature;
+        // Trigger spins never reach here — they returned above, before Phase 1 — so this is only
+        // about rounds already in progress and autoplay.
+        bool skipPhase2 = gameManager != null
+            && (gameManager.isInFreeSpins || gameManager.isInHoldAndSpin || gameManager.isAutoPlaying);
         if (skipPhase2)
         {
             // Take the presentation down on the way out. Mid-round this is invisible — the next
             // spin's KillAllTweens would have cleared it — but on the last autoplay spin, and at the
             // end of a free-games round, there is no next spin and the dim used to sit there until
             // the player span again. The controller restarts the cycle via PlayWinLineCycle when the
-            // round is genuinely over; a special-feature spin is left alone, since AnimateAllScatters
-            // does its own KillWinTweens.
+            // round is genuinely over.
             winAnimationCoroutine = null;
 
-            // Only a Free Games trigger is left alone, because AnimateAllScatters immediately does
-            // its own KillWinTweens. Hold & Spin has no equivalent — its trigger sequence never
-            // touches the win layer — so the dim would sit over the whole feature if this were
-            // skipped for it too.
-            if (!freeGamesTriggered)
-            {
-                // Presentation is genuinely over here, so any dim the Mystery reveal was holding
-                // is released before the teardown rather than surviving it.
-                ReleaseHeldDim();
-                KillWinTweens();
-            }
+            // Presentation is genuinely over here, so any dim the Mystery reveal was holding is
+            // released before the teardown rather than surviving it.
+            ReleaseHeldDim();
+            KillWinTweens();
             yield break;
         }
 
