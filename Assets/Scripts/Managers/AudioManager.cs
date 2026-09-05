@@ -71,26 +71,8 @@ public class AudioManager : MonoBehaviour
     private float _musicVolume = 0.5f;
     private float _sfxVolume   = 1.0f;
 
-    internal bool MusicEnabled => _musicEnabled;
-    internal bool SfxEnabled   => _sfxEnabled;
     internal float MusicVolume => _musicVolume;
     internal float SfxVolume   => _sfxVolume;
-
-    internal void SetMusicEnabled(bool on)
-    {
-        _musicEnabled = on;
-        PlayerPrefs.SetInt(PrefKeyMusic, on ? 1 : 0);
-        PlayerPrefs.Save();
-        ApplyMusicVolume();
-    }
-
-    internal void SetSfxEnabled(bool on)
-    {
-        _sfxEnabled = on;
-        PlayerPrefs.SetInt(PrefKeysfx, on ? 1 : 0);
-        PlayerPrefs.Save();
-        ApplySfxVolume();
-    }
 
     internal void SetMusicVolume(float volume)
     {
@@ -200,9 +182,6 @@ public class AudioManager : MonoBehaviour
         PlayUISound(clipBetPlusMinus);
     }
 
-    internal void PlayBetPlus()  => PlayBetPlusMinus();
-    internal void PlayBetMinus() => PlayBetPlusMinus();
-
     // 3. Max Bet Reached
     internal void PlayMaxBetReached()
     {
@@ -276,15 +255,12 @@ public class AudioManager : MonoBehaviour
     internal void PlaySpinStop()     => PlayPrimaryActionButton();
     internal void PlayTakeButton()   => PlayPrimaryActionButton();
     internal void PlayAutoplayStop() => PlayPrimaryActionButton();
-    internal void PlayWheelStart()   => PlayPrimaryActionButton();
 
     // 7. General Button Click
     internal void PlayButton()
     {
         PlayUISound(clipGeneralButtonClick);
     }
-
-    internal void PlayGeneralButtonClick() => PlayButton();
 
     // 8. Popup Open Close Sound
     internal void PlayPopupOpenClose()
@@ -293,7 +269,6 @@ public class AudioManager : MonoBehaviour
     }
 
     internal void PlayPopupClose() => PlayPopupOpenClose();
-    internal void PlayPopupOpen()  => PlayPopupOpenClose();
 
     // 9. Autoplay Panel Open Sound
     internal void PlayAutoplayPanelOpen()
@@ -306,15 +281,6 @@ public class AudioManager : MonoBehaviour
     {
         if (clipFeatureOpenLoop == null) return;
         PlayLoop(bgMusicSource, clipFeatureOpenLoop);
-    }
-
-    internal void StopFeatureOpenLoop()
-    {
-        if (bgMusicSource != null && bgMusicSource.clip == clipFeatureOpenLoop)
-        {
-            StopBgMusic();
-            PlayBgMusic(); // Resume main BG
-        }
     }
 
     // 11. FreeSpin BG (loop while free spin)
@@ -347,11 +313,6 @@ public class AudioManager : MonoBehaviour
 
     // 16. Turbo / spin-speed toggle
     internal void PlayTurboButton() => PlayUISound(clipTurboButton);
-
-    // 17. Free games presentation cues
-    internal void PlayFreeGamesAwarded() => PlayUISound(clipFreeGamesAwarded);
-    internal void PlayChooseFreeGames()  => PlayUISound(clipChooseFreeGames);
-    internal void PlayCardReveal()       => PlayUISound(clipCardReveal);
 
     private bool isForceMuted = false;
 

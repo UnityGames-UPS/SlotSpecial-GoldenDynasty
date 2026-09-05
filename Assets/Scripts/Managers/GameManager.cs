@@ -27,7 +27,6 @@ public class GameManager : MonoBehaviour
 
     [Header("Win Settings")]
     [SerializeField] private double bigWinMultiplierThreshold = 500.0;
-    public double BigWinMultiplierThreshold => bigWinMultiplierThreshold;
 
     internal GameConfig gameConfig;
     internal PlayerData playerData;
@@ -248,7 +247,7 @@ public class GameManager : MonoBehaviour
             slotView.StartSpin();
         }
 
-        socketManager.SendSpinRequest(currentBetIndex, isInFreeSpins);
+        socketManager.SendSpinRequest(currentBetIndex);
 
         if (spinCoroutine != null)
             StopCoroutine(spinCoroutine);
@@ -1057,12 +1056,6 @@ public class GameManager : MonoBehaviour
     {
         double activeLine = (gameConfig != null && gameConfig.activeLine > 0) ? gameConfig.activeLine : 27;
         return currentBetAmount * activeLine;
-    }
-
-    internal bool CanAffordBet()
-    {
-        double totalPay = GetTotalPay();
-        return playerData.balance >= totalPay;
     }
 
     internal bool IsSpinning()

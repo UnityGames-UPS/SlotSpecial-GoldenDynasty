@@ -298,7 +298,6 @@ public class SpinResult
     // Column-major: [reel][row], the transpose of the server's row-major matrix.
     public List<List<int>> resultMatrix;
     public double winAmount;
-    public double grandTotalWin;
     public List<WinLine> winLines;
     public PlayerData playerData;
 
@@ -386,18 +385,6 @@ public class HoldAndSpinData
     // spin an Orb is present, in or out of a round. Prizes are assigned when an Orb lands and are
     // then frozen for the rest of the round, so a cell already drawn never needs rewriting.
     public Dictionary<int, double> orbPrizes;
-}
-
-#endregion
-
-#region Platform Communication
-
-[Serializable]
-public class AuthData
-{
-    public string token;
-    public string socketURL;
-    public string nameSpace;
 }
 
 #endregion
@@ -551,7 +538,6 @@ public static class InitDataConverter
         {
             resultMatrix = ConvertMatrixToColumns(serverResponse?.matrix, gameConfig),
             winAmount = winAmountVal,
-            grandTotalWin = winAmountVal,
             winLines = ConvertLineWins(payload?.lineWins, gameConfig),
 
             playerData = new PlayerData

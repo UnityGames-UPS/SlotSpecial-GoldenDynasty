@@ -3,7 +3,6 @@ using UnityEngine.UI;
 using TMPro;
 using DG.Tweening;
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine.EventSystems;
 
 public class UIManager : MonoBehaviour
@@ -189,22 +188,15 @@ public class UIManager : MonoBehaviour
     private Tween balanceTween;
     private Tween winTween;
 
-    // Optimistic balance: the locally-deducted balance shown while the spin is in flight
-    private double optimisticBalance = 0;
-    private bool hasOptimisticBalance = false;
-
     [Header("Rapid Stop Cooldown")]
     [Tooltip("Seconds the player must wait before pressing Stop again after an immediate stop.")]
     [SerializeField] private float rapidStopCooldown = 1f;
     private float lastRapidStopTime = -99f;
 
-    private int currentRulesPage = 0;
-    private bool isPageAnimating;
     [Header("UI State")]
     private double currentWinDisplayValue = 0;
     private bool isSpecialWinActive = false;
     public bool IsSpecialWinActive => isSpecialWinActive;
-    public System.Action OnSpecialWinComplete;
 
     // Universal Win Popup state
     private System.Action universalWinPopupCallback;
@@ -533,22 +525,6 @@ public class UIManager : MonoBehaviour
         }
 
         CloseAutoPlayPanelImmediate();
-    }
-
-    internal void OnSpinResultReceived()
-    {
-        if (gameManager.isAutoPlaying)
-        {
-            SetSpinStopButtonStates(isSpinningState: true, isInteractable: true);
-        }
-        else if (gameManager.isInFreeSpins)
-        {
-            SetSpinStopButtonStates(isSpinningState: true, isInteractable: false);
-        }
-        else
-        {
-            SetSpinStopButtonStates(isSpinningState: true, isInteractable: true);
-        }
     }
 
     internal void OnSpinStopping(SpinResult result = null)
@@ -1384,19 +1360,6 @@ public class UIManager : MonoBehaviour
             SetGameObjectActive(goodLuckObject, goodLuckObjectPortrait, true);
             SetGameObjectActive(winTextObject, winTextObjectPortrait, false);
         }
-    }
-
-    private void AnimateBalanceUpdate(double newBalance, double startBalance = -1f, float durationOverride = -1f)
-    {
-        if (balanceTween != null) balanceTween.Kill();
-        hasOptimisticBalance = false;
-        SetTMPText(balanceText, balanceTextPortrait, "BALANCE : " + FormatAmount(newBalance));
-    }
-
-    private void AnimateWinUpdate(double targetWin, float duration = 0.8f)
-    {
-        if (winTween != null) winTween.Kill();
-        UpdateWinDisplay(targetWin);
     }
 
     #endregion

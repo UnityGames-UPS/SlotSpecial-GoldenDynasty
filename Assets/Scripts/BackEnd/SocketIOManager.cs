@@ -42,13 +42,11 @@ public class SocketIOManager : MonoBehaviour
     [SerializeField] private bool enablePingDebug = false;
 
     private Coroutine pingCoroutine;
-    private float lastPongTime;
     private float pingSendTime;
     private bool waitingForPong;
     private int missedPongs;
     private const int MAX_MISSED_PONGS = 5;
     private const float PING_INTERVAL = 2f;
-    private const float PONG_TIMEOUT = 5f;
 
     #region Initialization
 
@@ -189,7 +187,6 @@ public class SocketIOManager : MonoBehaviour
         isConnected = true;
         waitingForPong = false;
         missedPongs = 0;
-        lastPongTime = Time.time;
         pingSendTime = Time.realtimeSinceStartup;
 
         if (popupManager != null)
@@ -556,7 +553,6 @@ public class SocketIOManager : MonoBehaviour
     private void OnPongReceived(string data)
     {
         waitingForPong = false;
-        lastPongTime = Time.time;
 
         if (pingSendTime > 0f)
         {
@@ -588,10 +584,7 @@ public class SocketIOManager : MonoBehaviour
 
     #region Spin Request
 
-    // isFreeSpin is still accepted so GameManager's call site is untouched, but it is no longer
-    // sent: the server tracks free-spin state itself and reports it back on the response. The
-    // parameter can come out when the free-games work lands.
-    internal void SendSpinRequest(int betIndex, bool isFreeSpin)
+    internal void SendSpinRequest(int betIndex)
     {
         Debug.Log($"[SocketIO] Spin request: betIndex={betIndex}");
 

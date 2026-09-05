@@ -344,11 +344,6 @@ public class SlotView : MonoBehaviour
         }
     }
 
-    internal void HideSymbolInfoCard()
-    {
-        if (symbolInfoCard != null) symbolInfoCard.HideCard();
-    }
-
     internal void OnBetChanged()
     {
         if (symbolInfoCard != null && symbolInfoCard.gameObject.activeSelf)
