@@ -33,26 +33,51 @@ public class DragonFlyer : MonoBehaviour
     [SerializeField] private float flyerZOffset = -1f;
 
     // The path's shape. Serialized rather than const — a deliberate exception to the project's
-    // rule — because these are pure visual feel and want a slider, not a recompile, per change.
-    // They live here rather than on the caller so every dial for the flight is on one component.
+    // rule — because these are pure visual feel and want tuning in the Inspector, not a recompile,
+    // per change. They live here rather than on the caller so every dial for the flight is on one
+    // component. No [Range] caps: a value that turns out to want 2.5 should not need a code edit to
+    // get there.
+    //
+    // Both offsets are in WORLD axes, not axes relative to the direction of travel. That is the
+    // whole point of them. See BuildCurve.
     [Header("Flight Path")]
-    [Tooltip("How far along the line each control point sits, as a fraction of the path. Near 0 = tight hooks at both ends. Near 0.5 = one long lazy sweep.")]
-    [SerializeField] private float controlSpread = 1.3f;
+    [Tooltip("Where the dragon heads FIRST, as a fraction of the path's length. X is INWARD — toward the middle of the flight bounds — so it flips sign either side of the board. Y is world vertical: negative dives into the reel area.")]
+    [SerializeField] private Vector2 startOffset = new Vector2(1.8f, -0.3f);
 
-    [Tooltip("How far the controls push sideways, as a fraction of the path's length. This is the raw drama — 0.3 is a gentle arc, 1.0+ is wild.")]
-    [SerializeField] private float bendAmount = 0.9f;
+    [Tooltip("How the dragon comes IN to the panel. Same units and axes as the start offset. Its X must OPPOSE the start offset's for the path to cross itself into a loop — matching signs give one smooth sweep instead.")]
+    [SerializeField] private Vector2 endOffset = new Vector2(-1.2f, -1.2f);
 
-    [Tooltip("How much the bend differs between paths. 0 = every dragon flies the same shape. 1 = anything from flat to double the bend.")]
-    [SerializeField] private float bendVariance = 0.6f;
+    [Tooltip("How much the shape differs between Orbs, hashed from position so a given Orb always flies the same path. WARNING: loops are sensitive to this — much above 0.15 and the scaled-down paths stop crossing themselves. Variety and loops trade against each other.")]
+    [SerializeField] private float bendVariance = 0.1f;
 
-    [Tooltip("How far past the target the second control reaches, as a fraction of the path. Makes the dragon overshoot and hook back in rather than arriving straight.")]
-    [SerializeField] private float overshoot = 0.25f;
-
-    [Tooltip("ON: the second control opposes the first, so the dragon weaves — an S-curve. OFF: both bend the same way, one big sweeping arc.")]
-    [SerializeField] private bool sCurve = true;
+    [Tooltip("Ceiling for both control points, as a fraction of the flight bounds' height up from its bottom. This is what keeps the loop DOWN in the reel area rather than arcing up over the board.")]
+    [SerializeField] private float controlCeiling = 0.9f;
 
     private Tween flightTween;
     private Coroutine ribbonRoutine;
+
+    // The region the path should stay inside and bow toward. Optional: without it the flight still
+    // runs, it just cannot orient itself relative to the board.
+    private Rect flightBounds;
+    private bool hasFlightBounds;
+
+    /// <summary>
+    /// Hands this flyer the region its path should stay inside and bow toward, in WORLD space.
+    ///
+    /// Deliberately a plain Rect rather than anything that names the board. The caller owns game
+    /// geometry, this component owns motion, and "stay inside this, bow toward its middle" is the
+    /// whole of what has to cross between them — which is what lets this stay a component that
+    /// would serve any "thing flies from A to B" effect.
+    ///
+    /// Set once before a walk rather than passed on every Fly, since it is constant for the round.
+    /// Without it the flight still works: "inward" falls back to the target and the ceiling is
+    /// skipped, which is the old behaviour.
+    /// </summary>
+    internal void SetFlightBounds(Rect worldBounds)
+    {
+        flightBounds = worldBounds;
+        hasFlightBounds = true;
+    }
 
     /// <summary>
     /// Flies from <paramref name="start"/> to <paramref name="end"/> along a curve this flyer
@@ -169,7 +194,13 @@ public class DragonFlyer : MonoBehaviour
     ///
     /// Cubic rather than quadratic because one control point can only ever bulge the path one way —
     /// turning the bend up makes a bigger arc, never a different shape. Two lets the path weave,
-    /// hook, and overshoot.
+    /// hook, and cross itself into a loop.
+    ///
+    /// The offsets are in WORLD axes rather than axes relative to the direction of travel, and that
+    /// is the whole point of them. An Orb-to-panel path points roughly upward, so its perpendicular
+    /// is roughly horizontal AND rotates as the path does — in path-relative terms neither "down"
+    /// nor "toward the middle of the board" can be expressed at all. This is why the previous
+    /// version could only ever bow sideways no matter how its numbers were tuned.
     /// </summary>
     private void BuildCurve(Vector3 start, Vector3 end, out Vector3 c1, out Vector3 c2)
     {
@@ -183,30 +214,41 @@ public class DragonFlyer : MonoBehaviour
             return;
         }
 
-        Vector3 forward = dir / length;
-        Vector3 perp = new Vector3(-forward.y, forward.x, 0f);
-
-        // Which way this path bows. Taken from the start's position relative to the target, so
-        // everything left of the panel arcs one way and everything right arcs the other — that
-        // reads as intent, where a random side reads as a bug.
-        float side = start.x < end.x ? 1f : -1f;
-
-        // Per-path variation, hashed from the start position: no two Orbs fly the same shape, and
-        // the same Orb always flies the same one. Deterministic, and needs nothing passed in — the
-        // flyer still knows nothing about Orbs or indices.
+        // Per-path variation, hashed from the start position: no two Orbs fly quite the same shape,
+        // and the same Orb always flies the same one. Deterministic, and needs nothing passed in —
+        // the flyer still knows nothing about Orbs or indices.
         float hash = Mathf.Abs(Mathf.Sin((start.x * 12.9898f) + (start.y * 78.233f)) * 43758.5453f);
         float variant = hash - Mathf.Floor(hash);                       // 0..1
-        float bend = length * bendAmount * (1f - bendVariance + (bendVariance * 2f * variant));
+        float scale = 1f - bendVariance + (bendVariance * 2f * variant);
 
-        c1 = start + (forward * (length * controlSpread)) + (perp * (bend * side));
+        // Which way the middle of the board lies from this Orb, so the two columns either side of
+        // centre bow toward it rather than out past the edge.
+        //
+        // Measured against the BOUNDS, not against the target. The panel is a single fixed point,
+        // so comparing against it says which way the path bows relative to the panel — it cannot
+        // know where the middle column is. With no bounds set the target is the only reference
+        // available, which reproduces the old behaviour rather than flattening the path.
+        float centreX = hasFlightBounds ? flightBounds.center.x : end.x;
+        float inward = start.x <= centreX ? 1f : -1f;
 
-        // The second control opposes the first for an S, or matches it for one big arc. Pushing it
-        // past the end is what makes the dragon overshoot and hook back rather than arriving
-        // straight on.
-        float secondSide = sCurve ? -side : side;
-        c2 = end - (forward * (length * controlSpread))
-                 + (perp * (bend * secondSide))
-                 + (forward * (length * overshoot));
+        c1 = new Vector3(start.x + (length * startOffset.x * scale * inward),
+                         start.y + (length * startOffset.y * scale),
+                         start.z);
+
+        c2 = new Vector3(end.x + (length * endOffset.x * scale * inward),
+                         end.y + (length * endOffset.y * scale),
+                         end.z);
+
+        // The ceiling is what keeps the loop DOWN in the reel area. A Bezier never leaves the convex
+        // hull of its control points, so with both controls under this line the only thing that can
+        // carry the path above it is an endpoint — which is exactly the final climb into the panel.
+        // Containment by construction, rather than by tuning until it looks contained.
+        if (hasFlightBounds)
+        {
+            float ceiling = flightBounds.yMin + (flightBounds.height * controlCeiling);
+            if (c1.y > ceiling) c1.y = ceiling;
+            if (c2.y > ceiling) c2.y = ceiling;
+        }
     }
 
     // Cubic Bezier. Hand-rolled rather than DOTween's DOPath because the derivative below gives the

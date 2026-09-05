@@ -109,7 +109,7 @@ public class HoldAndSpinView : MonoBehaviour
     // flicker rather than a transition.
     private const float blackoutFadeDuration = 1.2f;
     private const float payoutHoldBeforeCountUp = 0.4f;
-    private const float payoutCountUpDuration = 2.0f;
+    private const float payoutCountUpDuration = 2.5f;
     private const float redPulseDuration = 0.6f;        // one half of the cross-fade, effects <-> Win
     // Orb to Blue, per dragon. The path's SHAPE is not here — that is serialized on DragonFlyer, so
     // it can be tuned alongside the ribbon. Nor is the gap between dragons: that is the ribbon's own
@@ -673,6 +673,14 @@ public class HoldAndSpinView : MonoBehaviour
         // GameObject.
         dragon.gameObject.SetActive(true);
 
+        // The region the dragons loop inside. Handed over once — it is the same for every flight in
+        // the round — and as a plain Rect, so the flyer never learns that a board exists.
+        Rect boardBounds = BuildOrbGridBounds();
+        if (boardBounds.width > 0f && boardBounds.height > 0f)
+        {
+            dragon.SetFlightBounds(boardBounds);
+        }
+
         double running = 0;
 
         foreach (int flatIndex in order)
@@ -720,6 +728,44 @@ public class HoldAndSpinView : MonoBehaviour
         dragon.gameObject.SetActive(false);
 
         if (winnerBlueText != null) winnerBlueText.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
+    }
+
+    /// <summary>
+    /// World-space bounds of the Orb grid, for the dragons to loop inside.
+    ///
+    /// Built from the first and last slot rather than a new SlotView accessor: a grid is bounded by
+    /// its opposite corners by definition, and GetOrbSlotRect is already how this view asks for slot
+    /// geometry. One less thing to keep in sync.
+    ///
+    /// World space, because that is what the flight endpoints are in — both come from
+    /// RectTransform.position — and a ceiling computed in any other space would land nowhere near
+    /// the board.
+    /// </summary>
+    private Rect BuildOrbGridBounds()
+    {
+        if (slotView == null) return new Rect();
+
+        int cells = slotView.ReelCount * slotView.RowCount;
+        RectTransform first = slotView.GetOrbSlotRect(0);
+        RectTransform last = slotView.GetOrbSlotRect(cells - 1);
+        if (first == null || last == null) return new Rect();
+
+        // GetWorldCorners fills bottom-left, top-left, top-right, bottom-right.
+        var corners = new Vector3[4];
+
+        first.GetWorldCorners(corners);
+        float xMin = corners[0].x;
+        float yMin = corners[0].y;
+        float xMax = corners[2].x;
+        float yMax = corners[2].y;
+
+        last.GetWorldCorners(corners);
+        xMin = Mathf.Min(xMin, corners[0].x);
+        yMin = Mathf.Min(yMin, corners[0].y);
+        xMax = Mathf.Max(xMax, corners[2].x);
+        yMax = Mathf.Max(yMax, corners[2].y);
+
+        return Rect.MinMaxRect(xMin, yMin, xMax, yMax);
     }
 
     // One pass of Blue's holder animation, per arrival. Blue punctuates — it reacts to being hit,

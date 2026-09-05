@@ -129,9 +129,32 @@ public class ImageAnimation : MonoBehaviour
         Invoke(nameof(AnimationProcess), delayBetweenAnimation);
     }
 
+    public void PlayAnimation()
+    {
+        StartAnimation();
+    }
+
     public void Play()
     {
         StartAnimation();
+    }
+
+    public void PauseAnimation()
+    {
+        if (currentAnimationState == ImageState.PLAYING)
+        {
+            CancelInvoke(nameof(AnimationProcess));
+            currentAnimationState = ImageState.PAUSED;
+        }
+    }
+
+    public void ResumeAnimation()
+    {
+        if (currentAnimationState == ImageState.PAUSED && !IsInvoking(nameof(AnimationProcess)))
+        {
+            Invoke(nameof(AnimationProcess), delayBetweenAnimation);
+            currentAnimationState = ImageState.PLAYING;
+        }
     }
 
     public void StopAnimation()

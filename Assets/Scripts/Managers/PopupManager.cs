@@ -175,6 +175,22 @@ public class PopupManager : MonoBehaviour
     }
 
     /// <summary>
+    /// Show error popup for session expired
+    /// </summary>
+    internal void ShowSessionExpiredError()
+    {
+        ShowErrorPopup("Warning", "Your session has expired. Please log in again.", true);
+    }
+
+    /// <summary>
+    /// Show error popup for invalid auth token
+    /// </summary>
+    internal void ShowInvalidAuthError()
+    {
+        ShowErrorPopup("Warning", "Invalid authentication token. Please log in again.", true);
+    }
+
+    /// <summary>
     /// Show error popup for server error
     /// </summary>
     internal void ShowServerError(string message = "A server error occurred. Please try again later.")
@@ -628,11 +644,38 @@ public class PopupManager : MonoBehaviour
     }
 
     /// <summary>
+    /// Check if any popup is currently active
+    /// </summary>
+    internal bool IsAnyPopupActive()
+    {
+        return currentActivePopup != null && currentActivePopup.activeSelf;
+    }
+
+    /// <summary>
     /// Check if the loading popup is currently active
     /// </summary>
     internal bool IsLoadingPopupActive()
     {
         return loadingPopup != null && loadingPopup.activeSelf;
+    }
+
+    /// <summary>
+    /// Force close all popups (emergency cleanup)
+    /// </summary>
+    internal void ForceCloseAllPopups()
+    {
+        StopRotation();
+        StopLoadingTextAnimation();
+
+        if (autoCloseCoroutine != null)
+        {
+            StopCoroutine(autoCloseCoroutine);
+            autoCloseCoroutine = null;
+        }
+
+        HideAllPopups();
+        currentActivePopup = null;
+        UpdatePopupParentState();
     }
 
     #endregion

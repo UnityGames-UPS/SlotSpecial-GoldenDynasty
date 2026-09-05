@@ -247,7 +247,7 @@ public class GameManager : MonoBehaviour
             slotView.StartSpin();
         }
 
-        socketManager.SendSpinRequest(currentBetIndex);
+        socketManager.SendSpinRequest(currentBetIndex, isInFreeSpins);
 
         if (spinCoroutine != null)
             StopCoroutine(spinCoroutine);
