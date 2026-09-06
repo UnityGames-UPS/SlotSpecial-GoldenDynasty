@@ -114,7 +114,7 @@ public class HoldAndSpinView : MonoBehaviour
     // Orb to Blue, per dragon. The path's SHAPE is not here — that is serialized on DragonFlyer, so
     // it can be tuned alongside the ribbon. Nor is the gap between dragons: that is the ribbon's own
     // fade time, owned and waited on by the flyer.
-    private const float dragonFlightDuration = 0.6f;
+    private const float dragonFlightDuration = 0.8f;
 
     private Coroutine activeSequence;
     private Tween promptPulseTween;
@@ -529,15 +529,16 @@ public class HoldAndSpinView : MonoBehaviour
         if (winnerPanel != null) winnerPanel.SetActive(true);
         SetGroupAlpha(winnerPanelGroup, 1f, true);
 
-        // 3. Blue starts EMPTY. The walk fills it, one Orb at a time.
+        // 3. Blue starts EMPTY. The walk fills it, one Orb at a time. The Winner graphic comes up
+        //    here too, but static — it does not start animating until Red.
         ShowWinnerBlue(0);
 
         // 4. The walk: a dragon from every held Orb, in turn. Ends with Blue showing the full total,
         //    which is where the old placeholder started it — so everything below is unchanged.
         yield return WalkRoutine(roundWin, orbPrizes);
 
-        // 5. Red takes over, and only now does the Winner graphic come up. Blue's holder goes with
-        //    it — the two are never on screen together.
+        // 5. Red takes over, and the Winner graphic — already up since step 3 — starts animating.
+        //    Blue's holder goes; the two holders are never on screen together.
         ShowWinnerRed();
 
         // 6. Count up from zero to the same total. The second climb is intentional: the totals
@@ -566,8 +567,8 @@ public class HoldAndSpinView : MonoBehaviour
         //    values fade back in at the same time.
         yield return RaiseBlackout();
 
-        // 8. Everything except the red holder reverts while nothing can be seen: the cell layer,
-        //    the Orb layer, the board dressing, the column reels.
+        // 8. Everything except the red holder reverts while nothing can be seen: the Winner graphic,
+        //    the cell layer, the Orb layer, the board dressing, the column reels.
         RestoreBoardForBaseGame();
 
         // 9. Back out, leaving the red holder alone on a base-game board — still counting its
@@ -620,6 +621,12 @@ public class HoldAndSpinView : MonoBehaviour
     /// </summary>
     private void RestoreBoardForBaseGame()
     {
+        // The Winner graphic goes here, behind the blackout, with everything else that reverts out
+        // of sight. It has been up since Blue, so leaving it would bring it back alongside the red
+        // holder when the blackout lowers — and step 9 is meant to leave the red holder ALONE.
+        // Deactivating also stops its ImageAnimation via OnDisable.
+        if (winnerGraphic != null) winnerGraphic.SetActive(false);
+
         foreach (var cell in AllCells())
         {
             cell.ResetCell();
@@ -705,6 +712,13 @@ public class HoldAndSpinView : MonoBehaviour
             Vector3 start = orbRect.position;
             Vector3 end = targetRect.position;
 
+            // TEMPORARY, names the flyer's one-line flight summary so a whole round reads as one
+            // line per Orb. Row and column are derived the same way ResolveOrbSlot does it.
+            dragon.DiagnosticLabel = string.Format("orb {0,2} (r{1},c{2})",
+                                                   flatIndex,
+                                                   flatIndex / slotView.ReelCount,
+                                                   flatIndex % slotView.ReelCount);
+
             bool arrived = false;
             bool ready = false;
 
@@ -783,7 +797,20 @@ public class HoldAndSpinView : MonoBehaviour
     private void ShowWinnerBlue(double startingTotal)
     {
         if (winnerRed != null) winnerRed.SetActive(false);
-        if (winnerGraphic != null) winnerGraphic.SetActive(false);
+
+        // The Winner graphic comes up WITH Blue but stays still. It is a static header over the
+        // walk, and only starts moving when Red takes over — so being visible and being animated
+        // are two separate beats here, not one.
+        //
+        // This depends on Start On Enable being UNTICKED on its ImageAnimation: with it set,
+        // activating the object would call StartAnimation from OnEnable and the graphic would be
+        // animating through the whole walk regardless of anything below.
+        if (winnerGraphic != null) winnerGraphic.SetActive(true);
+        if (winnerGraphicAnim != null)
+        {
+            winnerGraphicAnim.StopAnimation();
+            winnerGraphicAnim.RevertToInitialState();
+        }
 
         if (winnerBlue != null) winnerBlue.SetActive(true);
         if (winnerBlueText != null) winnerBlueText.text = startingTotal.ToString(SpriteTextFormatter.MoneyFormat);
@@ -808,6 +835,8 @@ public class HoldAndSpinView : MonoBehaviour
         if (winnerRed != null) winnerRed.SetActive(true);
         if (winnerRedText != null) winnerRedText.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
 
+        // Already on screen since Blue — this is where it starts MOVING. Kept as a SetActive too so
+        // the method still stands alone if the outro order ever changes.
         if (winnerGraphic != null) winnerGraphic.SetActive(true);
         if (winnerGraphicAnim != null)
         {

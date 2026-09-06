@@ -55,7 +55,7 @@ public class SlotView : MonoBehaviour
         { 5, new Vector2(210f, 210f) },  // Lady
         { 7, LargeSymbolSize },          // Drum
         { 1, LargeSymbolSize },           // Scatter
-        { 3, new Vector2(200f, 200f) }   // Mystery
+        { 3, new Vector2(250f, 250f) }   // Mystery
     };
 
     // Playback speed per symbol, applied wherever that symbol's clip is assigned.

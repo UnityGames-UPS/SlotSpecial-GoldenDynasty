@@ -53,8 +53,19 @@ public class DragonFlyer : MonoBehaviour
     [Tooltip("Ceiling for both control points, as a fraction of the flight bounds' height up from its bottom. This is what keeps the loop DOWN in the reel area rather than arcing up over the board.")]
     [SerializeField] private float controlCeiling = 0.9f;
 
+    [Header("Diagnostics")]
+    [Tooltip("TEMPORARY. Logs why a ribbon does or does not appear at the start of each flight. Off for normal play — it logs every frame for the first stretch of every flight.")]
+    [SerializeField] private bool logFlightDiagnostics;
+
     private Tween flightTween;
     private Coroutine ribbonRoutine;
+    private Coroutine diagnosticRoutine;
+
+    // Captured by BuildCurve purely so the diagnostics can report them. Not read by the flight.
+    private float lastScale;
+    private float lastInward;
+    private bool lastCeilingClampedC1;
+    private bool lastCeilingClampedC2;
 
     // The region the path should stay inside and bow toward. Optional: without it the flight still
     // runs, it just cannot orient itself relative to the board.
@@ -110,6 +121,11 @@ public class DragonFlyer : MonoBehaviour
 
         if (head != null) head.enabled = true;
 
+        if (logFlightDiagnostics)
+        {
+            diagnosticRoutine = StartCoroutine(SummariseFlight(start));
+        }
+
         flightTween = DOVirtual.Float(0f, 1f, Mathf.Max(0.01f, duration), t =>
             {
                 transform.position = WithOffset(Point(start, c1, c2, end, t));
@@ -153,6 +169,12 @@ public class DragonFlyer : MonoBehaviour
             ribbonRoutine = null;
         }
 
+        if (diagnosticRoutine != null)
+        {
+            StopCoroutine(diagnosticRoutine);
+            diagnosticRoutine = null;
+        }
+
         if (trail != null)
         {
             trail.emitting = false;
@@ -172,6 +194,84 @@ public class DragonFlyer : MonoBehaviour
 
         ribbonRoutine = null;
         onReady?.Invoke();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // TEMPORARY diagnostics — remove once the late-ribbon question is settled.
+    //
+    // The one measurement that matters is positionCount over the first frames. A TrailRenderer has
+    // no geometry at all until it holds two points, so:
+    //   count climbs 1 -> 2 immediately, but nothing is visible  => a RENDERING problem
+    //                                                               (material, sorting, width, alpha)
+    //   count sits at 1 for several frames                       => a RECORDING problem
+    //                                                               (minVertexDistance, emitting, movement)
+    // Everything else logged here is context for whichever of those it turns out to be.
+    // ---------------------------------------------------------------------------------------------
+
+    // Set by the caller immediately before Fly so each summary line can name its Orb. Temporary, and
+    // the only reason this component knows an Orb exists — it is a string it prints and never reads.
+    internal string DiagnosticLabel { private get; set; }
+
+    private IEnumerator SummariseFlight(Vector3 start)
+    {
+        // Half a second at 60fps. The whole question is about the OPENING of the flight, so there is
+        // no point sampling the rest of a two-second path.
+        const int framesToSample = 30;
+
+        float startedAt = Time.time;
+        int firstGeometryFrame = -1;
+        float firstGeometryDelay = 0f;
+        float firstGeometryDistance = 0f;
+        int maxPositions = 0;
+
+        for (int frame = 0; frame < framesToSample; frame++)
+        {
+            yield return null;
+
+            if (trail == null) yield break;
+
+            int count = trail.positionCount;
+            if (count > maxPositions) maxPositions = count;
+
+            // A TrailRenderer draws nothing until it holds two points, so this is the exact frame the
+            // ribbon could first have been visible. If it is 0 or 1 and you still saw no ribbon, the
+            // geometry was there and the problem is how it is being drawn, not when it is recorded.
+            if (firstGeometryFrame < 0 && count >= 2)
+            {
+                firstGeometryFrame = frame;
+                firstGeometryDelay = Time.time - startedAt;
+                firstGeometryDistance = Vector3.Distance(transform.position, WithOffset(start));
+            }
+        }
+
+        string geometry = firstGeometryFrame < 0
+            ? "NEVER within sample"
+            : string.Format("frame {0,2} (+{1:F3}s, moved {2:F3})",
+                            firstGeometryFrame, firstGeometryDelay, firstGeometryDistance);
+
+        // Only worth printing when something is actually wrong — it is identical on every flight
+        // otherwise, and the point of one line per Orb is that it stays scannable.
+        string warnings = "";
+        if (trail != null)
+        {
+            if (trail.sharedMaterial == null) warnings += " [NO MATERIAL]";
+            if (!trail.emitting) warnings += " [NOT EMITTING]";
+            if (!trail.gameObject.activeInHierarchy) warnings += " [TRAIL INACTIVE]";
+            if (trail.widthMultiplier <= 0.001f) warnings += " [ZERO WIDTH]";
+        }
+
+        Debug.Log(string.Format(
+            "[DragonFlyer] {0,-14} scale={1:F3} inward={2,2} clamp={3}{4}  |  first geometry: {5}  |  maxPts={6}{7}",
+            string.IsNullOrEmpty(DiagnosticLabel) ? "?" : DiagnosticLabel,
+            lastScale,
+            lastInward > 0f ? "+1" : "-1",
+            lastCeilingClampedC1 ? "c1" : "--",
+            lastCeilingClampedC2 ? "c2" : "--",
+            geometry,
+            maxPositions,
+            warnings));
+
+        diagnosticRoutine = null;
     }
 
     private Vector3 WithOffset(Vector3 point)
@@ -231,6 +331,9 @@ public class DragonFlyer : MonoBehaviour
         float centreX = hasFlightBounds ? flightBounds.center.x : end.x;
         float inward = start.x <= centreX ? 1f : -1f;
 
+        lastScale = scale;
+        lastInward = inward;
+
         c1 = new Vector3(start.x + (length * startOffset.x * scale * inward),
                          start.y + (length * startOffset.y * scale),
                          start.z);
@@ -243,11 +346,14 @@ public class DragonFlyer : MonoBehaviour
         // hull of its control points, so with both controls under this line the only thing that can
         // carry the path above it is an endpoint — which is exactly the final climb into the panel.
         // Containment by construction, rather than by tuning until it looks contained.
+        lastCeilingClampedC1 = false;
+        lastCeilingClampedC2 = false;
+
         if (hasFlightBounds)
         {
             float ceiling = flightBounds.yMin + (flightBounds.height * controlCeiling);
-            if (c1.y > ceiling) c1.y = ceiling;
-            if (c2.y > ceiling) c2.y = ceiling;
+            if (c1.y > ceiling) { c1.y = ceiling; lastCeilingClampedC1 = true; }
+            if (c2.y > ceiling) { c2.y = ceiling; lastCeilingClampedC2 = true; }
         }
     }
 
