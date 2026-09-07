@@ -55,7 +55,8 @@ public class SlotView : MonoBehaviour
         { 5, new Vector2(210f, 210f) },  // Lady
         { 7, LargeSymbolSize },          // Drum
         { 1, LargeSymbolSize },           // Scatter
-        { 3, new Vector2(250f, 250f) }   // Mystery
+        { 3, new Vector2(250f, 250f) },   // Mystery
+        { 2, new Vector2(250f, 250f) }   // Orb
     };
 
     // Playback speed per symbol, applied wherever that symbol's clip is assigned.
@@ -76,7 +77,7 @@ public class SlotView : MonoBehaviour
     {
         { 0,  25f },  // Wild
         { 1,  90f },  // Scatter
-        { 2,  20f },  // Orb
+        { 2,  30f },  // Orb
         { 3,  35f },  // Mystery
         { 4,  25f },  // Warriors
         { 5,  25f },  // Lady
@@ -107,6 +108,9 @@ public class SlotView : MonoBehaviour
     [SerializeField] private List<Sprite> animSpritesQ;              // ID: 10
     [SerializeField] private List<Sprite> animSpritesJ;              // ID: 11
     [SerializeField] private List<Sprite> animSprites10;             // ID: 12
+
+    [Tooltip("The Orb's SECOND animation, played only during a Hold & Spin round. Leave it empty and Orbs keep their base-game animation throughout — the feature still switches, it just switches to the same frames.")]
+    [SerializeField] private List<Sprite> animSpritesOrbFeature;
 
     // Internal array of animation sprite lists
     private List<Sprite>[] animationSpriteArrays;
@@ -204,6 +208,11 @@ public class SlotView : MonoBehaviour
     [SerializeField] private GameObject orbLayerRoot;
     [Tooltip("One entry per reel column, each holding the 3 row slots top to bottom. Same shape as the win and Mystery layers.")]
     [SerializeField] private List<OrbSlotColumn> orbSlotColumns = new List<OrbSlotColumn>(5);
+
+    // Which variant an Orb written from now on should use. Set true for the duration of a Hold &
+    // Spin round so Orbs landing mid-round arrive already animating the feature clip, and cleared
+    // when the board goes back — see SetAllOrbAnimations.
+    private bool orbFeatureAnimationDefault;
 
     [Header("Phase 1 Total Win Presentation")]
     [SerializeField] private TMPro.TMP_Text phase1TotalWinText;
@@ -1470,12 +1479,32 @@ public class SlotView : MonoBehaviour
             slot.prizeText.gameObject.SetActive(true);
         }
 
-        ImageAnimation imageAnim = slot.animation;
+        PlayOrbAnimation(slot, orbFeatureAnimationDefault);
+    }
+
+    // Starts one Orb slot's looping animation, in whichever of the two variants is asked for.
+    //
+    // Split out of WriteOrbSlot because the Hold & Spin round switches an Orb's animation WITHOUT
+    // rewriting its sprite or its prize — the Orb on screen does not change, only what it is doing.
+    private void PlayOrbAnimation(OrbSlot slot, bool feature)
+    {
+        ImageAnimation imageAnim = slot?.animation;
         if (imageAnim == null) return;
 
-        List<Sprite> frames = (animationSpriteArrays != null && orbId < animationSpriteArrays.Length)
-            ? animationSpriteArrays[orbId]
-            : null;
+        int orbId = OrbSymbolId;
+        if (orbId < 0) return;
+
+        // The feature variant falls back to the base frames when it is unwired, so the switching
+        // works before the second sprite sequence exists — both variants simply look the same.
+        List<Sprite> frames = null;
+        if (feature && animSpritesOrbFeature != null && animSpritesOrbFeature.Count > 0)
+        {
+            frames = animSpritesOrbFeature;
+        }
+        else if (animationSpriteArrays != null && orbId < animationSpriteArrays.Length)
+        {
+            frames = animationSpriteArrays[orbId];
+        }
 
         if (frames == null || frames.Count == 0) return;
 
@@ -1488,6 +1517,47 @@ public class SlotView : MonoBehaviour
         // inherited from whichever symbol used this slot last.
         imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(orbId);
         imageAnim.StartAnimation();
+    }
+
+    /// <summary>
+    /// Switches ONE Orb's animation between its base-game and Hold & Spin variants, leaving the
+    /// sprite and the prize alone. Used by the payout walk to revert each Orb as its dragon lifts
+    /// off, which is also the only feedback that an Orb has been collected.
+    ///
+    /// Restarts the clip from frame 0 — swapping the frame list requires it.
+    /// </summary>
+    internal void SetOrbAnimation(int flatIndex, bool feature)
+    {
+        OrbSlot slot = ResolveOrbSlot(flatIndex);
+        if (slot?.image == null || !slot.image.gameObject.activeSelf) return;
+
+        PlayOrbAnimation(slot, feature);
+    }
+
+    /// <summary>
+    /// Switches every Orb currently on the layer, and sets which variant Orbs written from now on
+    /// get — so an Orb landing mid-round comes up already wearing the feature animation.
+    ///
+    /// That default MUST be put back to false when the round ends, or the base-game board rebuilt by
+    /// ApplyOrbLayer comes back wearing the feature clip. RestoreBoardForBaseGame and ResetToDefault
+    /// both do it.
+    /// </summary>
+    internal void SetAllOrbAnimations(bool feature)
+    {
+        orbFeatureAnimationDefault = feature;
+
+        if (orbSlotColumns == null) return;
+
+        foreach (var column in orbSlotColumns)
+        {
+            if (column?.rows == null) continue;
+
+            foreach (var slot in column.rows)
+            {
+                if (slot?.image == null || !slot.image.gameObject.activeSelf) continue;
+                PlayOrbAnimation(slot, feature);
+            }
+        }
     }
 
     // Where an Orb is drawn on screen, for the Hold & Spin payout walk to launch a dragon from.

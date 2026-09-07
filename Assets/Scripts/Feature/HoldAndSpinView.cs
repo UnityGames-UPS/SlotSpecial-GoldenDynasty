@@ -305,7 +305,15 @@ public class HoldAndSpinView : MonoBehaviour
 
         RestoreBoardDressing();
 
-        if (slotView != null) slotView.SetColumnReelsVisible(true);
+        if (slotView != null)
+        {
+            slotView.SetColumnReelsVisible(true);
+
+            // The hard reset path — an interruption can land here without the round's outro ever
+            // having run, so the feature variant has to be cleared here too rather than only in
+            // RestoreBoardForBaseGame.
+            slotView.SetAllOrbAnimations(false);
+        }
 
         pendingTakeCallback = null;
     }
@@ -346,6 +354,13 @@ public class HoldAndSpinView : MonoBehaviour
             yield return WaitForImageAnimation(fullScreenIntro);
             fullScreenIntro.SetActive(false);
         }
+
+        // 2b. The Orbs change to their feature animation the moment the intro clears — the first
+        //     thing that says the board now belongs to the feature. Every held Orb switches at once
+        //     and restarts from frame 0, so they run in step for the rest of the round. Orbs landing
+        //     later come up already wearing it; SlotView keeps that as its default until the board
+        //     goes back.
+        if (slotView != null) slotView.SetAllOrbAnimations(true);
 
         // 3. The board changes around the symbols, which do not move.
         ApplyBoardDressing();
@@ -643,6 +658,12 @@ public class HoldAndSpinView : MonoBehaviour
         {
             slotView.SetColumnReelsVisible(true);
 
+            // Cleared BEFORE the rebuild below, which writes Orbs using this default — leave it set
+            // and the base-game board comes back animating the feature clip. The per-Orb reverts in
+            // the walk do not cover this: they change the Orbs on screen, not what the next write
+            // will use, and a round whose walk was skipped never ran them at all.
+            slotView.SetAllOrbAnimations(false);
+
             // Rebuilt to match the board coming back, NOT cleared. Those reels still hold the
             // triggering spin's Orbs, and an Orb without its prize on it is not something this
             // game ever shows.
@@ -721,6 +742,11 @@ public class HoldAndSpinView : MonoBehaviour
 
             bool arrived = false;
             bool ready = false;
+
+            // Back to the base-game animation as the dragon lifts off, not when it lands. This is
+            // the only thing on the board that says an Orb has been collected — without it fifteen
+            // Orbs sit identical while dragons leave them one at a time.
+            if (slotView != null) slotView.SetOrbAnimation(flatIndex, false);
 
             // Only the endpoints. The curve between them is the flyer's own business — its shape
             // lives on that component, where it can be tuned with the ribbon rather than in code.

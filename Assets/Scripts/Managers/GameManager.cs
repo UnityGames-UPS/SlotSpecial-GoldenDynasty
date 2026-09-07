@@ -934,14 +934,31 @@ public class GameManager : MonoBehaviour
         }
 
         uiManager.SetFreeGamesButtonLock(true);
-        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.HoldAndSpinStart);
+
+        // Start comes up in its Hold & Spin skin but DEAD, and stays that way for the whole trigger
+        // sequence. The button is pressable only once the prompt that asks for it is on screen —
+        // pressing during the full-screen intro would otherwise start the round underneath it.
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.HoldAndSpinStart, interactable: false);
 
         currentState = GameState.Idle;
 
         if (holdAndSpinView != null)
         {
-            holdAndSpinView.BeginTrigger(holdAndSpin.orbPrizes, null);
+            holdAndSpinView.BeginTrigger(holdAndSpin.orbPrizes, OnHoldSpinTriggerComplete);
         }
+        else
+        {
+            // No view to run the sequence, so nothing will ever call back. Hand the button over
+            // immediately rather than leaving the player with a dead Start and no way forward.
+            OnHoldSpinTriggerComplete();
+        }
+    }
+
+    // The trigger sequence has finished: the intro has played out and the "PRESS START FEATURE
+    // BUTTON" prompt is up. Only now does Start become pressable.
+    private void OnHoldSpinTriggerComplete()
+    {
+        uiManager.SetSpinButtonMode(UIManager.SpinButtonMode.HoldAndSpinStart, interactable: true);
     }
 
     // The Start button — routed here by UIManager's HoldAndSpinStart mode. The prompt gives way to
