@@ -310,9 +310,10 @@ public class HoldAndSpinView : MonoBehaviour
             slotView.SetColumnReelsVisible(true);
 
             // The hard reset path — an interruption can land here without the round's outro ever
-            // having run, so the feature variant has to be cleared here too rather than only in
-            // RestoreBoardForBaseGame.
+            // having run, so the feature variant and the dim both have to be cleared here too
+            // rather than only in RestoreBoardForBaseGame.
             slotView.SetAllOrbAnimations(false);
+            slotView.SetFeatureDim(false);
         }
 
         pendingTakeCallback = null;
@@ -343,8 +344,14 @@ public class HoldAndSpinView : MonoBehaviour
             }
         }
 
-        // 1. Everything sits for a beat. This is the entire trigger cue — there is no anticipation
-        //    build-up for Orbs, unlike the scatter tease in Free Games.
+        // 1. The board dims and everything sits for a beat. This is the entire trigger cue — there
+        //    is no anticipation build-up for Orbs, unlike the scatter tease in Free Games.
+        //
+        //    The dim goes up BEFORE the full-screen intro, so the triggering Orbs are already
+        //    sitting on a darkened board when it plays. It stays up for the whole round and comes
+        //    down behind the closing blackout, never visibly.
+        if (slotView != null) slotView.SetFeatureDim(true);
+
         yield return new WaitForSeconds(triggerOrbHold);
 
         // 2. Full-screen animation.
@@ -600,23 +607,24 @@ public class HoldAndSpinView : MonoBehaviour
     // Full alpha, not a tint: this has to hide the board completely while it changes back.
     private IEnumerator RaiseBlackout()
     {
-        // Same duration as the blackout, so the two genuinely move together rather than one
-        // trailing the other.
-        if (topGroup != null)
+        if (darkOverlayGroup != null)
         {
-            topGroup.gameObject.SetActive(true);
-            topGroup.DOFade(1f, blackoutFadeDuration);
+            darkOverlayGroup.gameObject.SetActive(true);
+            yield return darkOverlayGroup.DOFade(1f, blackoutFadeDuration).WaitForCompletion();
         }
-
-        if (darkOverlayGroup == null)
+        else
         {
             // Unwired: the reverts still have to happen, they are just not hidden.
             yield return new WaitForSeconds(blackoutFadeDuration);
-            yield break;
         }
 
-        darkOverlayGroup.gameObject.SetActive(true);
-        yield return darkOverlayGroup.DOFade(1f, blackoutFadeDuration).WaitForCompletion();
+        // AFTER the screen is genuinely black, never alongside it. These two used to fade together
+        // on the same duration, which meant the payout values were already visible over a board that
+        // had not finished going dark — the blackout is a cover for changes, so anything it is meant
+        // to hide has to happen once it is opaque, not while it is on its way there.
+        //
+        // Snapped rather than faded for the same reason: at full alpha there is nothing to see.
+        SetGroupAlpha(topGroup, 1f, true);
     }
 
     private IEnumerator LowerBlackout()
@@ -657,6 +665,10 @@ public class HoldAndSpinView : MonoBehaviour
         if (slotView != null)
         {
             slotView.SetColumnReelsVisible(true);
+
+            // The dim goes down here, with everything else that reverts out of sight. Dropping it
+            // any earlier would show the board brightening while the payout was still on screen.
+            slotView.SetFeatureDim(false);
 
             // Cleared BEFORE the rebuild below, which writes Orbs using this default — leave it set
             // and the base-game board comes back animating the feature clip. The per-Orb reverts in

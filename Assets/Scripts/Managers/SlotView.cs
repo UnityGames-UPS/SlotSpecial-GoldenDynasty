@@ -214,6 +214,20 @@ public class SlotView : MonoBehaviour
     // when the board goes back — see SetAllOrbAnimations.
     private bool orbFeatureAnimationDefault;
 
+    // The base-game Orb pulse. Serialized rather than const — the same deliberate exception the
+    // DragonFlyer path fields make — because a tint is judged by eye against the real art, and a
+    // recompile per shade is the wrong loop for that.
+    //
+    // Image.color MULTIPLIES the sprite, so this can only pull channels down. That still raises
+    // saturation: cutting the weaker channels further from the strongest is exactly what widens
+    // (max - min) / max. The cost is a slight loss of brightness at the tinted end.
+    [Header("Orb Pulse (base game only)")]
+    [Tooltip("Colour the Orb flashes toward. White = no pulse. Pull the WEAKER channels down to raise saturation — for a gold Orb try (1, 0.9, 0.7). Alpha is ignored.")]
+    [SerializeField] private Color orbPulseTint = new Color(1f, 0.9f, 0.7f, 1f);
+
+    [Tooltip("Seconds for ONE direction of the flash. The full cycle out and back is twice this.")]
+    [SerializeField] private float orbPulseDuration = 0.6f;
+
     [Header("Phase 1 Total Win Presentation")]
     [SerializeField] private TMPro.TMP_Text phase1TotalWinText;
 
@@ -241,6 +255,12 @@ public class SlotView : MonoBehaviour
     // True while the win dim is being held up by the Mystery reveal, so the win presentation that
     // follows inherits it instead of dropping and re-raising it (which would flicker).
     private bool dimHeld;
+
+    // A feature round's claim on the shared dim — a third one alongside the win presentation and
+    // dimHeld. Held from the moment a Hold & Spin trigger is known until the closing blackout hides
+    // the board being put back. Anything that lowers the dim has to check this, or an ordinary win
+    // teardown mid-round would drop it out from under a live feature.
+    private bool featureDimHeld;
 
     // Cells that landed as a Mystery this spin, as flat indices. Captured when the reels are told
     // to stop, so the landing write knows to draw a Mystery there instead of the revealed symbol.
@@ -1430,6 +1450,12 @@ public class SlotView : MonoBehaviour
                 {
                     if (slot == null) continue;
 
+                    if (slot.pulseTween != null)
+                    {
+                        slot.pulseTween.Kill();
+                        slot.pulseTween = null;
+                    }
+
                     if (slot.animation != null)
                     {
                         slot.animation.StopAnimation();
@@ -1442,6 +1468,10 @@ public class SlotView : MonoBehaviour
                     {
                         slot.image.DOKill();
                         slot.image.transform.localScale = Vector3.one;
+
+                        // Back to white, so a slot cleared mid-pulse cannot hand a stale tint to
+                        // whatever is drawn here next.
+                        slot.image.color = Color.white;
                         slot.image.gameObject.SetActive(false);
                     }
                 }
@@ -1469,8 +1499,12 @@ public class SlotView : MonoBehaviour
         slotImage.DOKill();
         ApplySymbol(slotImage, orbId);
         slotImage.transform.localScale = Vector3.one;
-        Color c = slotImage.color;
-        slotImage.color = new Color(c.r, c.g, c.b, 1f);
+
+        // Forced fully back to white, not just to full alpha. This used to preserve r/g/b, which was
+        // harmless while nothing ever tinted an Orb — but the base-game pulse does, and a pulse
+        // killed mid-cycle leaves the Image on a partial tint. Carrying that forward would make Orbs
+        // drift to random shades over a session, permanently.
+        slotImage.color = Color.white;
         slotImage.gameObject.SetActive(true);
 
         if (slot.prizeText != null)
@@ -1488,7 +1522,11 @@ public class SlotView : MonoBehaviour
     // rewriting its sprite or its prize — the Orb on screen does not change, only what it is doing.
     private void PlayOrbAnimation(OrbSlot slot, bool feature)
     {
-        ImageAnimation imageAnim = slot?.animation;
+        if (slot == null) return;
+
+        ApplyOrbPulse(slot, feature);
+
+        ImageAnimation imageAnim = slot.animation;
         if (imageAnim == null) return;
 
         int orbId = OrbSymbolId;
@@ -1517,6 +1555,38 @@ public class SlotView : MonoBehaviour
         // inherited from whichever symbol used this slot last.
         imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(orbId);
         imageAnim.StartAnimation();
+    }
+
+    // Starts or stops one Orb's saturation flash. Tied to the ANIMATION VARIANT, not to whether a
+    // round is running: an Orb the walk has already collected is back on its base clip and starts
+    // pulsing again straight away, which is deliberate.
+    //
+    // Always resets to white first. Killing a yoyo mid-cycle leaves the Image on whatever tint it
+    // had reached, and nothing downstream restores it — see the note in WriteOrbSlot.
+    private void ApplyOrbPulse(OrbSlot slot, bool feature)
+    {
+        if (slot.pulseTween != null)
+        {
+            slot.pulseTween.Kill();
+            slot.pulseTween = null;
+        }
+
+        Image slotImage = slot.image;
+        if (slotImage == null) return;
+
+        Color white = new Color(1f, 1f, 1f, slotImage.color.a);
+        slotImage.color = white;
+
+        // No pulse during the feature, and none for a tint that would do nothing anyway.
+        if (feature || orbPulseDuration <= 0f) return;
+
+        Color tint = new Color(orbPulseTint.r, orbPulseTint.g, orbPulseTint.b, slotImage.color.a);
+        if (tint == white) return;
+
+        slot.pulseTween = slotImage
+            .DOColor(tint, orbPulseDuration)
+            .SetLoops(-1, LoopType.Yoyo)
+            .SetEase(Ease.InOutSine);
     }
 
     /// <summary>
@@ -2164,7 +2234,9 @@ public class SlotView : MonoBehaviour
     {
         if (winAnimationLayer != null) winAnimationLayer.SetActive(false);
 
-        if (dimHeld) return;
+        // featureDimHeld is the same kind of guard as dimHeld: a feature round owns the dim for its
+        // whole duration, so a win teardown inside the round cannot take it down.
+        if (dimHeld || featureDimHeld) return;
         if (winDimOverlay != null) winDimOverlay.SetActive(false);
     }
 
@@ -2173,6 +2245,31 @@ public class SlotView : MonoBehaviour
     private void ReleaseHeldDim()
     {
         dimHeld = false;
+
+        // Releasing the reveal's claim does not release a feature round's.
+        if (featureDimHeld) return;
+        if (winDimOverlay != null) winDimOverlay.SetActive(false);
+    }
+
+    /// <summary>
+    /// A feature round taking or releasing the board dim.
+    ///
+    /// Hold &amp; Spin raises it the moment the trigger is known — before the full-screen intro — and
+    /// releases it behind the closing blackout, so the dim never visibly pops on or off. Orbs on
+    /// their own do NOT dim the board: this is about a round starting, not about Orbs being present.
+    /// </summary>
+    internal void SetFeatureDim(bool held)
+    {
+        featureDimHeld = held;
+
+        if (held)
+        {
+            if (winDimOverlay != null) winDimOverlay.SetActive(true);
+            return;
+        }
+
+        // Releasing this claim does not release the Mystery reveal's.
+        if (dimHeld) return;
         if (winDimOverlay != null) winDimOverlay.SetActive(false);
     }
 
@@ -2253,6 +2350,10 @@ public class OrbSlot
     public Image image;
     public ImageAnimation animation;
     public TMPro.TMP_Text prizeText;
+
+    // The base-game saturation pulse. Held per slot rather than killed with image.DOKill() so that
+    // stopping the pulse cannot take an unrelated tween on the same Image down with it.
+    [System.NonSerialized] public Tween pulseTween;
 }
 
 // One reel column's worth of Orb slots — 3 rows, matching the grid, same shape as AnimSlotColumn.
