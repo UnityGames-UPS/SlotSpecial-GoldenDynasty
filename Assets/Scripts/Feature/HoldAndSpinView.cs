@@ -1075,7 +1075,14 @@ public class HoldAndSpinView : MonoBehaviour
         // Values only — what is visible is owned by SetRoundCountersVisible, so this cannot
         // accidentally raise a counter during the award prompt.
         if (orbCountText != null) orbCountText.text = heldCells.Count.ToString();
-        if (spinsRemainingCount != null) spinsRemainingCount.text = Mathf.Max(0, spinsRemaining).ToString();
+
+        // ToSpriteDigits, NOT ToSpriteMoney: this is a count, not an amount. The money path would
+        // put it through MoneyFormat and render 3 spins as "3.00".
+        if (spinsRemainingCount != null)
+        {
+            spinsRemainingCount.text =
+                SpriteTextFormatter.ToSpriteDigits(Mathf.Max(0, spinsRemaining).ToString());
+        }
     }
 
     // Plays a one-shot ImageAnimation and waits it out. Falls back to a fixed beat when the object

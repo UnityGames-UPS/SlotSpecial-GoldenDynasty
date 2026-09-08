@@ -1509,7 +1509,11 @@ public class SlotView : MonoBehaviour
 
         if (slot.prizeText != null)
         {
-            slot.prizeText.text = prize.ToString("F2");
+            // Sprite digits, like the big-win counter — the Orb's number is drawn in the same
+            // sprite-digit font, not a text font. Also puts this on SpriteTextFormatter.MoneyFormat
+            // instead of a local "F2": the two produce the same string today, but a literal here
+            // would silently stop matching the rest of the game the moment that format changed.
+            slot.prizeText.text = SpriteTextFormatter.ToSpriteMoney(prize);
             slot.prizeText.gameObject.SetActive(true);
         }
 
