@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 2636bc96216d62e4fb9e99c68b82d797
+guid: 1db84a87ad16f43f1b99c26caecfa737
 TextureImporter:
   internalIDToNameTable:
   - first:
@@ -122,6 +122,19 @@ TextureImporter:
     ignorePlatformSupport: 0
     androidETC2FallbackOverride: 0
     forceMaximumCompressionQuality_BC6H_BC7: 0
+  - serializedVersion: 4
+    buildTarget: iOS
+    maxTextureSize: 2048
+    resizeAlgorithm: 0
+    textureFormat: -1
+    textureCompression: 1
+    compressionQuality: 50
+    crunchedCompression: 0
+    allowsAlphaSplitting: 0
+    overridden: 0
+    ignorePlatformSupport: 0
+    androidETC2FallbackOverride: 0
+    forceMaximumCompressionQuality_BC6H_BC7: 0
   spriteSheet:
     serializedVersion: 2
     sprites:
@@ -129,10 +142,10 @@ TextureImporter:
       name: gradient_1_0
       rect:
         serializedVersion: 2
-        x: 35
-        y: 43
-        width: 465
-        height: 939
+        x: 44
+        y: 54
+        width: 578
+        height: 1170
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
