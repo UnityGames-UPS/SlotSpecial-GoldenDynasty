@@ -83,6 +83,12 @@ crashlytics-build.properties
 # TestRunner generated files
 InitTestScene*.unity*
 
+# Performance Testing package artifacts. Written into Assets/Resources only for the duration of a
+# build/test run (so they get baked into the player) and deleted afterwards — committing while a
+# build is in flight is the only way they ever land in a commit.
+/[Aa]ssets/[Rr]esources/PerformanceTestRunInfo.json*
+/[Aa]ssets/[Rr]esources/PerformanceTestRunSettings.json*
+
 # Addressables default ignores, before user customizations
 /ServerData
 /[Aa]ssets/StreamingAssets/aa*
