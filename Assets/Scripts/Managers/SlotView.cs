@@ -112,6 +112,12 @@ public class SlotView : MonoBehaviour
     [Tooltip("The Orb's SECOND animation, played only during a Hold & Spin round. Leave it empty and Orbs keep their base-game animation throughout — the feature still switches, it just switches to the same frames.")]
     [SerializeField] private List<Sprite> animSpritesOrbFeature;
 
+    [Tooltip("Wild drawn as TWO stacked Wilds, for when two winning Wilds sit directly one above the other in a column. Empty = that pair just plays two ordinary single animations.")]
+    [SerializeField] private List<Sprite> animSpritesWild2;
+
+    [Tooltip("Wild drawn as THREE stacked Wilds, for a full column of winning Wilds. Empty = falls back to single animations the same way.")]
+    [SerializeField] private List<Sprite> animSpritesWild3;
+
     // Internal array of animation sprite lists
     private List<Sprite>[] animationSpriteArrays;
 
@@ -256,6 +262,21 @@ public class SlotView : MonoBehaviour
     // follows inherits it instead of dropping and re-raising it (which would flicker).
     private bool dimHeld;
 
+    // Authored pivot and anchoredPosition of every win-layer slot, captured in Awake. x,y hold the
+    // position and z,w the pivot. See CacheAnimSlotLayout.
+    private Dictionary<RectTransform, Vector4> animSlotLayouts;
+
+    // Slots currently stretched to cover a run of Wilds, and slots currently fading one out. A slot
+    // is in at most one of these. Both exist so the ordinary teardown can leave a fading stack
+    // alone — it must not be killed, alpha-reset, hidden or un-stretched while it is still on
+    // screen. See BeginWildStackFadeOut.
+    private readonly HashSet<AnimSlot> stretchedStackSlots = new HashSet<AnimSlot>();
+    private readonly HashSet<AnimSlot> fadingStackSlots = new HashSet<AnimSlot>();
+
+    // How long a stacked Wild takes to fade once the player spins again. It fades over the already
+    // spinning reels — the spin is never held up for it.
+    private const float wildStackFadeDuration = 0.35f;
+
     // A feature round's claim on the shared dim — a third one alongside the win presentation and
     // dimHeld. Held from the moment a Hold & Spin trigger is known until the closing blackout hides
     // the board being put back. Anything that lowers the dim has to check this, or an ordinary win
@@ -310,6 +331,49 @@ public class SlotView : MonoBehaviour
     {
         BuildSymbolSpriteArray();
         InitializeReels();
+        CacheAnimSlotLayout();
+    }
+
+    // Records every win-layer slot's authored pivot and position, once, before anything can change
+    // them. Stacked Wilds re-anchor a slot to its bottom edge and stretch it, and this is what those
+    // slots are put back to afterwards.
+    //
+    // Captured here rather than saved-and-restored around each use so there is no "did I already
+    // convert this one" state to get wrong: the restore always writes the same absolute values, no
+    // matter how many times it runs or which path got there.
+    private void CacheAnimSlotLayout()
+    {
+        animSlotLayouts = new Dictionary<RectTransform, Vector4>();
+
+        if (animSlotColumns == null) return;
+
+        foreach (var column in animSlotColumns)
+        {
+            if (column?.rows == null) continue;
+
+            foreach (var slot in column.rows)
+            {
+                if (slot?.image == null) continue;
+
+                RectTransform rect = slot.image.rectTransform;
+                if (animSlotLayouts.ContainsKey(rect)) continue;
+
+                // x,y = anchoredPosition   z,w = pivot
+                animSlotLayouts[rect] = new Vector4(rect.anchoredPosition.x, rect.anchoredPosition.y,
+                                                    rect.pivot.x, rect.pivot.y);
+            }
+        }
+    }
+
+    // Puts one win-layer slot back to the pivot and position it was authored with. Size is not
+    // restored here because ApplySymbol rewrites sizeDelta on every use anyway.
+    private void RestoreAnimSlotLayout(RectTransform rect)
+    {
+        if (rect == null || animSlotLayouts == null) return;
+        if (!animSlotLayouts.TryGetValue(rect, out Vector4 layout)) return;
+
+        rect.pivot = new Vector2(layout.z, layout.w);
+        rect.anchoredPosition = new Vector2(layout.x, layout.y);
     }
     private void Start()
     {
@@ -1885,6 +1949,192 @@ public class SlotView : MonoBehaviour
         }
     }
 
+    // The stacked-Wild clip for a run of this height, or null if that art was never wired.
+    private List<Sprite> GetWildStackFrames(int stackHeight)
+    {
+        if (stackHeight == 2) return (animSpritesWild2 != null && animSpritesWild2.Count > 0) ? animSpritesWild2 : null;
+        if (stackHeight == 3) return (animSpritesWild3 != null && animSpritesWild3.Count > 0) ? animSpritesWild3 : null;
+        return null;
+    }
+
+    /// <summary>
+    /// Finds the columns where winning Wilds sit directly on top of one another.
+    ///
+    /// Only WINNING cells count. Two Wilds can be stacked on the board with just the lower one on a
+    /// payline — that is one ordinary animation, not half a tall one. Nothing here reads the board
+    /// except to ask what symbol a winning cell holds.
+    ///
+    /// A run needs its rows to be consecutive: rows 0 and 2 winning with row 1 on no line is two
+    /// separate single Wilds, because there is nothing to join them through.
+    ///
+    /// Runs whose art is missing are dropped, so an unwired clip degrades to the existing per-cell
+    /// behaviour instead of showing nothing.
+    /// </summary>
+    private void BuildWildStackRuns(IEnumerable<int> flatPositions, int rowLimit,
+                                    out Dictionary<int, int> anchors, out HashSet<int> covered)
+    {
+        anchors = new Dictionary<int, int>();
+        covered = new HashSet<int>();
+
+        int wildId = (gameManager != null && gameManager.gameConfig != null)
+            ? gameManager.gameConfig.wildSymbolId
+            : -1;
+
+        if (wildId < 0 || flatPositions == null || currentDisplayMatrix == null) return;
+
+        // Winning Wild rows per column. A payline set can list the same cell twice, so this is a set.
+        var wildRowsByColumn = new Dictionary<int, SortedSet<int>>();
+
+        foreach (int flatIndex in flatPositions)
+        {
+            int row = flatIndex / ReelCount;
+            int col = flatIndex % ReelCount;
+
+            if (col < 0 || col >= ReelCount || row < 0 || row >= rowLimit) continue;
+            if (col >= currentDisplayMatrix.Count || row >= currentDisplayMatrix[col].Count) continue;
+            if (currentDisplayMatrix[col][row] != wildId) continue;
+
+            if (!wildRowsByColumn.TryGetValue(col, out SortedSet<int> rows))
+            {
+                rows = new SortedSet<int>();
+                wildRowsByColumn[col] = rows;
+            }
+            rows.Add(row);
+        }
+
+        foreach (var entry in wildRowsByColumn)
+        {
+            int col = entry.Key;
+            var rows = new List<int>(entry.Value);          // ascending: row 0 is the TOP row
+
+            int runStart = 0;
+            for (int i = 1; i <= rows.Count; i++)
+            {
+                bool breaksRun = (i == rows.Count) || (rows[i] != rows[i - 1] + 1);
+                if (!breaksRun) continue;
+
+                int runLength = i - runStart;
+                if (runLength >= 2 && GetWildStackFrames(runLength) != null)
+                {
+                    // The anchor is the LAST row of the run, which is the lowest on screen — the
+                    // stack is built upward from there.
+                    int anchorRow = rows[i - 1];
+                    anchors[(anchorRow * ReelCount) + col] = runLength;
+
+                    for (int r = runStart; r < i - 1; r++)
+                    {
+                        covered.Add((rows[r] * ReelCount) + col);
+                    }
+                }
+
+                runStart = i;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-anchors one slot to its bottom edge and stretches it to cover a run of Wilds.
+    ///
+    /// Setting pivot from code does NOT shift anchoredPosition to compensate the way the inspector
+    /// does — that is an editor convenience, not RectTransform behaviour — so the position is moved
+    /// down by half the symbol's height to keep the bottom edge exactly where it already was.
+    ///
+    /// The height comes from SymbolSizeOverrides rather than a literal, so retuning Wild's size
+    /// carries into the stacked sizes with it.
+    /// </summary>
+    private void ApplyWildStackLayout(AnimSlot slot, int wildId, int stackHeight)
+    {
+        if (slot?.image == null) return;
+
+        RectTransform rect = slot.image.rectTransform;
+        Vector2 single = SymbolSizeOverrides.TryGetValue(wildId, out Vector2 size) ? size : normalSymbolSize;
+
+        // Read BEFORE the pivot changes, since changing the pivot is what moves the rect.
+        float bottomEdgeY = rect.anchoredPosition.y - (single.y * 0.5f);
+
+        rect.pivot = new Vector2(rect.pivot.x, 0f);
+        rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, bottomEdgeY);
+        rect.sizeDelta = new Vector2(single.x, single.y * stackHeight);
+
+        stretchedStackSlots.Add(slot);
+    }
+
+    // Takes a slot back for a new animation, whatever it was doing before. Needed because a fade
+    // interrupted by the next win presentation would otherwise leave the slot bottom-anchored:
+    // ApplySymbol puts sizeDelta back but never the pivot, and killing the tween means its
+    // completion never runs.
+    private void ReclaimAnimSlot(AnimSlot slot)
+    {
+        if (slot == null) return;
+
+        stretchedStackSlots.Remove(slot);
+        fadingStackSlots.Remove(slot);
+
+        if (slot.image != null) RestoreAnimSlotLayout(slot.image.rectTransform);
+    }
+
+    /// <summary>
+    /// Starts every stacked Wild fading out, and hands the slot over to that fade.
+    ///
+    /// ONLY the stacks fade. Every other winning symbol still goes instantly, which is the whole
+    /// point — the tall Wild lingers over the already-spinning reels and reads as the special thing
+    /// it is, rather than everything dissolving together.
+    ///
+    /// Called only on a FULL teardown. The win cycle tears down between every Phase 2 line, and
+    /// fading there would drop the stack out on each line change instead of once at the end.
+    /// </summary>
+    private void BeginWildStackFadeOut()
+    {
+        if (stretchedStackSlots.Count == 0) return;
+
+        // Copied and cleared up front: the tweens below mutate both sets as they complete, and a
+        // second teardown in the same frame (StartSpin does exactly that) must find nothing left to
+        // start rather than restarting a fade already in flight.
+        var slots = new List<AnimSlot>(stretchedStackSlots);
+        stretchedStackSlots.Clear();
+
+        foreach (var slot in slots)
+        {
+            if (slot?.image == null) continue;
+
+            fadingStackSlots.Add(slot);
+
+            Image image = slot.image;
+            image.DOKill();
+
+            // The clip keeps playing underneath. Freezing it on frame 0 for the fade would read as
+            // the animation breaking rather than the symbol leaving.
+            image.DOFade(0f, wildStackFadeDuration)
+                 .SetEase(Ease.Linear)
+                 .OnComplete(() => EndWildStackFade(slot));
+        }
+    }
+
+    // The stack has gone: stop its clip, put the slot back to its authored pivot and position, and
+    // hide it. This is the only place the layout is restored for a faded stack, since the ordinary
+    // teardown deliberately skipped it while it was still visible.
+    private void EndWildStackFade(AnimSlot slot)
+    {
+        if (slot == null) return;
+
+        fadingStackSlots.Remove(slot);
+
+        if (slot.animation != null)
+        {
+            slot.animation.onLoopComplete = null;
+            slot.animation.StopAnimation();
+        }
+
+        if (slot.image == null) return;
+
+        RestoreAnimSlotLayout(slot.image.rectTransform);
+
+        // Alpha back to full before hiding, so the next symbol drawn here does not start invisible.
+        Color c = slot.image.color;
+        slot.image.color = new Color(c.r, c.g, c.b, 1f);
+        slot.image.gameObject.SetActive(false);
+    }
+
     private IEnumerator AnimateWinPositions(IEnumerable<int> flatPositions)
     {
         if (flatPositions == null) yield break;
@@ -1897,6 +2147,14 @@ public class SlotView : MonoBehaviour
         bool isCompleted = false;
 
         bool anyShown = false;
+
+        // Wilds that are stacked one directly above another AND all on a payline play as a single
+        // tall animation instead of two or three separate ones. wildRunAnchors maps the BOTTOM cell
+        // of each such run to its length; wildRunCovered holds the cells above it, which contribute
+        // nothing of their own — the tall sprite already draws them.
+        BuildWildStackRuns(flatPositions, rowLimit,
+                           out Dictionary<int, int> wildRunAnchors,
+                           out HashSet<int> wildRunCovered);
 
         foreach (int flatIndex in flatPositions)
         {
@@ -1930,11 +2188,31 @@ public class SlotView : MonoBehaviour
                 : 0;
             if (symbolId == winBonusId) continue;
 
+            // A cell swallowed by a taller Wild below it. Its reel icon still has to go, or it
+            // ghosts through the dim behind the stacked sprite — but nothing of its own is drawn.
+            if (wildRunCovered.Contains(flatIndex))
+            {
+                SetDisplayIconActive(col, row, false);
+                continue;
+            }
+
+            bool isStackAnchor = wildRunAnchors.TryGetValue(flatIndex, out int stackHeight);
+
             // Show the symbol first, unconditionally. Some symbols have no animation frames at all
             // (their anim list is left empty), and under the dim a skipped slot would leave a
             // winning symbol sitting dark while its neighbours light up.
             slotImage.DOKill();
+
+            // Before ApplySymbol: an interrupted fade can leave this slot bottom-anchored, and the
+            // DOKill above means that fade's completion will never run to put it back.
+            ReclaimAnimSlot(slot);
+
             ApplySymbol(slotImage, symbolId);
+
+            // AFTER ApplySymbol, which stamps the single-symbol size — reversing these would flatten
+            // the stack straight back to one cell.
+            if (isStackAnchor) ApplyWildStackLayout(slot, symbolId, stackHeight);
+
             slotImage.transform.localScale = Vector3.one;
             Color c = slotImage.color;
             slotImage.color = new Color(c.r, c.g, c.b, 1f);
@@ -1950,7 +2228,14 @@ public class SlotView : MonoBehaviour
 
             // Animate on top of that only if this symbol actually has frames.
             if (symbolId < 0 || symbolId >= animationSpriteArrays.Length) continue;
-            List<Sprite> animSprites = animationSpriteArrays[symbolId];
+
+            // A stack anchor plays the tall clip; everything else plays its own. BuildWildStackRuns
+            // has already checked that the tall clip exists, so this cannot fall through to a single
+            // Wild animation stretched to twice its height.
+            List<Sprite> animSprites = isStackAnchor
+                ? GetWildStackFrames(stackHeight)
+                : animationSpriteArrays[symbolId];
+
             if (animSprites == null || animSprites.Count == 0) continue;
 
             ImageAnimation imageAnim = slot.animation;
@@ -2092,6 +2377,11 @@ public class SlotView : MonoBehaviour
         // Phase 2 — each cycle shows one win line, so the previous line's symbols have to go
         // before the next line's appear. Its Image and ImageAnimation are separate explicit
         // references, so this can't reuse RestoreImageList's GetComponent-based pass.
+        // Only a full teardown fades the stacked Wilds — the between-cycle reset runs before every
+        // Phase 2 line, and fading there would take the stack down on each line change rather than
+        // once, when the player actually spins.
+        if (stopCoroutine) BeginWildStackFadeOut();
+
         if (animSlotColumns != null)
         {
             foreach (var column in animSlotColumns)
@@ -2100,6 +2390,10 @@ public class SlotView : MonoBehaviour
                 foreach (var slot in column.rows)
                 {
                     if (slot == null) continue;
+
+                    // A stack still fading is exempt from all of this: killing its tween, forcing
+                    // its alpha back to 1 or stopping its clip would each end the fade on the spot.
+                    if (fadingStackSlots.Contains(slot)) continue;
 
                     if (slot.image != null)
                     {
@@ -2157,7 +2451,24 @@ public class SlotView : MonoBehaviour
                 if (column == null || column.rows == null) continue;
                 foreach (var slot in column.rows)
                 {
-                    if (slot != null && slot.image != null) slot.image.gameObject.SetActive(false);
+                    if (slot == null || slot.image == null) continue;
+
+                    // Still fading: it is deliberately left on screen, stretched and visible, and
+                    // EndWildStackFade hides and restores it when it finishes.
+                    if (fadingStackSlots.Contains(slot)) continue;
+
+                    stretchedStackSlots.Remove(slot);
+                    slot.image.gameObject.SetActive(false);
+
+                    // Undo any stacked-Wild re-anchoring. Done for every slot rather than only the
+                    // ones that were stretched, because this is the single point every teardown path
+                    // funnels through and writing back the authored values is idempotent — there is
+                    // no state to consult and nothing to get out of step.
+                    //
+                    // It matters beyond the Wilds: ApplySymbol restores sizeDelta but NOT pivot, so a
+                    // slot left bottom-anchored would render the next oversized symbol shooting
+                    // upward out of its cell, with nothing to point at the cause.
+                    RestoreAnimSlotLayout(slot.image.rectTransform);
                 }
             }
         }
