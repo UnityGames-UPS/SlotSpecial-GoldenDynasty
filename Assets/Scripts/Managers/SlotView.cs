@@ -79,7 +79,7 @@ public class SlotView : MonoBehaviour
         { 1,  90f },  // Scatter
         { 2,  30f },  // Orb
         { 3,  35f },  // Mystery
-        { 4,  25f },  // Warriors
+        { 4,  40f },  // Warriors
         { 5,  25f },  // Lady
         { 6,  20f },  // Book
         { 7,  50f },  // Drum

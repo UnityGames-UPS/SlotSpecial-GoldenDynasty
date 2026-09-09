@@ -45,6 +45,11 @@ public class HoldAndSpinView : MonoBehaviour
     [SerializeField] private GameObject counterPanel;
     [Tooltip("Orb count. Climbs by one the moment each Orb lands, not once per full stop. Hidden until Start is pressed.")]
     [SerializeField] private TMPro.TMP_Text orbCountText;
+
+    [Tooltip("A copy of the Orb count sitting behind it, scaled up and faded out every time the count changes. Optional: leave it empty and the counter just changes.")]
+    [SerializeField] private TMPro.TMP_Text orbCountGhostText;
+    [Tooltip("CanvasGroup on the ghost. Carries the fade — TMP_Text cannot be DOFaded here, the project has no DOTween TextMeshPro module.")]
+    [SerializeField] private CanvasGroup orbCountGhostGroup;
     [Tooltip("The \"Total 15 Win\" graphic beside the counters. Raised with them when the round starts.")]
     [SerializeField] private GameObject total15WinGraphic;
     [Tooltip("The respins-remaining graphic. A single static sprite — the number itself goes in spinsRemainingCount below.")]
@@ -118,6 +123,18 @@ public class HoldAndSpinView : MonoBehaviour
     // it can be tuned alongside the ribbon. Nor is the gap between dragons: that is the ribbon's own
     // fade time, owned and waited on by the flyer.
     private const float dragonFlightDuration = 0.8f;
+
+    // How the Orb count's ghost leaves. Scale and duration only — it does not move, so nothing
+    // resets a position.
+    private const float orbCountGhostDuration = 0.45f;
+    private const float orbCountGhostScale = 2.0f;
+
+    // The Orb count as last written. The ghost fires when the count CHANGES, which is what keeps it
+    // off the end-of-spin update that rewrites the same number. Reset to 0 whenever heldCells is
+    // cleared, or a second round would open remembering the first round's count and skip its
+    // opening pop — working perfectly once and never again.
+    private int lastOrbCountShown;
+    private Tween orbCountGhostTween;
 
     private Coroutine activeSequence;
     private Tween promptPulseTween;
@@ -287,6 +304,7 @@ public class HoldAndSpinView : MonoBehaviour
         }
 
         heldCells.Clear();
+        lastOrbCountShown = 0;
 
         foreach (var cell in AllCells())
         {
@@ -336,6 +354,7 @@ public class HoldAndSpinView : MonoBehaviour
         // this one — SlotView's display matrix is never written during a round — so the Orb layer
         // has to be put back to match it. See RestoreBoardForBaseGame.
         heldCells.Clear();
+        lastOrbCountShown = 0;
         triggerOrbPrizes.Clear();
 
         if (orbPrizes != null)
@@ -659,6 +678,7 @@ public class HoldAndSpinView : MonoBehaviour
         }
 
         heldCells.Clear();
+        lastOrbCountShown = 0;
 
         if (cellLayerRoot != null) cellLayerRoot.SetActive(false);
         if (fullScreenIntro != null) fullScreenIntro.SetActive(false);
@@ -1057,6 +1077,10 @@ public class HoldAndSpinView : MonoBehaviour
     // being asked to press Start, on for the rest of the round.
     private void SetRoundCountersVisible(bool visible)
     {
+        // A ghost caught mid-pop when the counters go would otherwise be left on screen, part-scaled
+        // and part-faded, with nothing else to take it down.
+        if (!visible) StopOrbCountGhost();
+
         if (orbCountText != null) orbCountText.gameObject.SetActive(visible);
         if (total15WinGraphic != null) total15WinGraphic.SetActive(visible);
         if (spinsRemainingImage != null) spinsRemainingImage.gameObject.SetActive(visible);
@@ -1102,9 +1126,11 @@ public class HoldAndSpinView : MonoBehaviour
     /// </summary>
     private void UpdateCounters(int spinsRemaining)
     {
+        int orbCount = heldCells.Count;
+
         // Values only — what is visible is owned by SetRoundCountersVisible, so this cannot
         // accidentally raise a counter during the award prompt.
-        if (orbCountText != null) orbCountText.text = heldCells.Count.ToString();
+        if (orbCountText != null) orbCountText.text = orbCount.ToString();
 
         // ToSpriteDigits, NOT ToSpriteMoney: this is a count, not an amount. The money path would
         // put it through MoneyFormat and render 3 spins as "3.00".
@@ -1113,6 +1139,63 @@ public class HoldAndSpinView : MonoBehaviour
             spinsRemainingCount.text =
                 SpriteTextFormatter.ToSpriteDigits(Mathf.Max(0, spinsRemaining).ToString());
         }
+
+        // On the CHANGE, not on the call. This method runs three times — the round opening, an Orb
+        // landing, and the end of a spin — and the last of those rewrites the same number, which
+        // should not pop. Comparing the value covers that without the ghost having to know which
+        // caller it came from, so a fourth caller could not break it either.
+        if (orbCount != lastOrbCountShown) PlayOrbCountGhost(orbCount);
+        lastOrbCountShown = orbCount;
+    }
+
+    /// <summary>
+    /// The Orb count's ghost: a copy of the number that scales up and fades away behind it, once per
+    /// change. Restarts cleanly if the next Orb lands while the previous one is still fading.
+    /// </summary>
+    private void PlayOrbCountGhost(int orbCount)
+    {
+        if (orbCountGhostGroup == null) return;
+
+        // Kill and fully reset first. A ghost caught part-scaled and part-faded has to snap back to
+        // the new number at full size and full alpha, not carry the old pop's state into this one.
+        StopOrbCountGhost();
+
+        if (orbCountGhostText != null) orbCountGhostText.text = orbCount.ToString();
+
+        orbCountGhostGroup.gameObject.SetActive(true);
+
+        Sequence seq = DOTween.Sequence();
+        seq.Join(orbCountGhostGroup.transform.DOScale(orbCountGhostScale, orbCountGhostDuration).SetEase(Ease.OutQuad));
+        seq.Join(orbCountGhostGroup.DOFade(0f, orbCountGhostDuration).SetEase(Ease.InQuad));
+        seq.OnComplete(() =>
+        {
+            orbCountGhostTween = null;
+            ResetOrbCountGhost();
+        });
+
+        orbCountGhostTween = seq;
+    }
+
+    private void StopOrbCountGhost()
+    {
+        if (orbCountGhostTween != null)
+        {
+            orbCountGhostTween.Kill();
+            orbCountGhostTween = null;
+        }
+
+        ResetOrbCountGhost();
+    }
+
+    // Back to full size and full alpha BEFORE being deactivated, so the next pop starts from a known
+    // state rather than from wherever the last one was killed.
+    private void ResetOrbCountGhost()
+    {
+        if (orbCountGhostGroup == null) return;
+
+        orbCountGhostGroup.transform.localScale = Vector3.one;
+        orbCountGhostGroup.alpha = 1f;
+        orbCountGhostGroup.gameObject.SetActive(false);
     }
 
     // Plays a one-shot ImageAnimation and waits it out. Falls back to a fixed beat when the object
