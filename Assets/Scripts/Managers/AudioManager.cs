@@ -50,8 +50,6 @@ public class AudioManager : MonoBehaviour
     [SerializeField] private AudioClip clipGeneralButtonClick;
     [SerializeField] private AudioClip clipPopupOpenClose;
     [SerializeField] private AudioClip clipAutoplayPanelOpen;
-    [Tooltip("Currently unused — nothing calls PlayFeatureOpenLoop. Kept deliberately.")]
-    [SerializeField] private AudioClip clipFeatureOpenLoop;
     [SerializeField] private AudioClip clipFreeSpinBg;
     [SerializeField] private AudioClip clipWinLinePhase1Start;
     [SerializeField] private AudioClip clipReelStop;
@@ -61,10 +59,18 @@ public class AudioManager : MonoBehaviour
     [SerializeField] private AudioClip clipBonusLand;
     [SerializeField] private AudioClip clipTurboButton;
 
-    [Header("Audio Clips - Free Games")]
-    [SerializeField] private AudioClip clipFreeGamesAwarded;
-    [SerializeField] private AudioClip clipChooseFreeGames;
-    [SerializeField] private AudioClip clipCardReveal;
+    [Header("Audio Clips - Golden Dynasty")]
+    [Tooltip("The Mystery reveal. ONE shot for the whole reveal, not one per door — a spin can reveal up to 15 cells on the same frame.")]
+    [SerializeField] private AudioClip clipMysteryDoorOpen;
+
+    [Tooltip("Plays as the Winner graphic starts animating and the red holder takes over, at the end of a Hold & Spin round.")]
+    [SerializeField] private AudioClip clipWinnerAnimation;
+
+    [Tooltip("The Free Games round running out. Plays alone — the congratulations cue and its panel wait for this one to finish.")]
+    [SerializeField] private AudioClip clipFreeGamesComplete;
+
+    [Tooltip("Plays with the CongratulationsPanel, after clipFreeGamesComplete has finished.")]
+    [SerializeField] private AudioClip clipCongratulations;
 
     private bool _musicEnabled = true;
     private bool _sfxEnabled   = true;
@@ -276,14 +282,7 @@ public class AudioManager : MonoBehaviour
         PlayUISound(clipAutoplayPanelOpen != null ? clipAutoplayPanelOpen : clipPopupOpenClose);
     }
 
-    // 10. Bonus Wheel & MoneyBag Feature Open Sound (loop until feature enabled)
-    internal void PlayFeatureOpenLoop()
-    {
-        if (clipFeatureOpenLoop == null) return;
-        PlayLoop(bgMusicSource, clipFeatureOpenLoop);
-    }
-
-    // 11. FreeSpin BG (loop while free spin)
+    // 10. FreeSpin BG (loop while free spin)
     internal void PlayFreeSpinBg()
     {
         if (clipFreeSpinBg == null) return;
@@ -313,6 +312,25 @@ public class AudioManager : MonoBehaviour
 
     // 16. Turbo / spin-speed toggle
     internal void PlayTurboButton() => PlayUISound(clipTurboButton);
+
+    // 17. Golden Dynasty cues.
+    internal void PlayMysteryDoorOpen() => PlayUISound(clipMysteryDoorOpen);
+    internal void PlayWinnerAnimation() => PlayUISound(clipWinnerAnimation);
+    internal void PlayCongratulations() => PlayUISound(clipCongratulations);
+
+    /// <summary>
+    /// The Free Games completion cue. Returns how long it runs, so the caller can hold the
+    /// congratulations panel until this has finished rather than hardcoding a duration that would
+    /// silently stop matching if the clip were replaced.
+    ///
+    /// The length comes back whether or not the clip was audible: with sfx muted the outro should
+    /// still be paced the same, not suddenly three seconds quicker.
+    /// </summary>
+    internal float PlayFreeGamesComplete()
+    {
+        PlayUISound(clipFreeGamesComplete);
+        return clipFreeGamesComplete != null ? clipFreeGamesComplete.length : 0f;
+    }
 
     private bool isForceMuted = false;
 

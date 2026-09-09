@@ -67,6 +67,9 @@ public class HoldAndSpinView : MonoBehaviour
     [SerializeField] private ImageAnimation winnerBlueAnim;
     [SerializeField] private TMPro.TMP_Text winnerBlueText;
 
+    [Tooltip("Burst played BEHIND the blue holder, in step with its pulse — one pass per dragon arrival. Optional: leave it empty and only the holder reacts.")]
+    [SerializeField] private ImageAnimation winnerBlueBurstAnim;
+
     [Header("Payout — Winner Red (final count-up)")]
     [Tooltip("Holder for the count-up from zero. Unlike blue it carries no animation of its own — the movement is in the two groups below.")]
     [SerializeField] private GameObject winnerRed;
@@ -755,10 +758,13 @@ public class HoldAndSpinView : MonoBehaviour
             bool arrived = false;
             bool ready = false;
 
-            // Back to the base-game animation as the dragon lifts off, not when it lands. This is
-            // the only thing on the board that says an Orb has been collected — without it fifteen
-            // Orbs sit identical while dragons leave them one at a time.
-            if (slotView != null) slotView.SetOrbAnimation(flatIndex, false);
+            // The Orb reacts as the dragon lifts off, not when it lands. This is the only thing on
+            // the board that says an Orb has been collected — without it fifteen Orbs sit identical
+            // while dragons leave them one at a time.
+            //
+            // A one-shot bridges the two clips and hands over to the base animation itself, so the
+            // walk does not have to know how long it runs.
+            if (slotView != null) slotView.PlayOrbCollectTransition(flatIndex);
 
             // Only the endpoints. The curve between them is the flyer's own business — its shape
             // lives on that component, where it can be tuned with the ribbon rather than in code.
@@ -822,13 +828,25 @@ public class HoldAndSpinView : MonoBehaviour
 
     // One pass of Blue's holder animation, per arrival. Blue punctuates — it reacts to being hit,
     // then sits idle until the next dragon lands. Red is the one that loops continuously.
+    //
+    // The burst behind the holder is driven from the same call so the two are one beat rather than
+    // two things that happen to be scheduled together. Each is independently optional.
     private void PulseWinnerBlue()
     {
-        if (winnerBlueAnim == null) return;
+        PlayOneShot(winnerBlueAnim);
+        PlayOneShot(winnerBlueBurstAnim);
+    }
 
-        winnerBlueAnim.doLoopAnimation = false;
-        winnerBlueAnim.onLoopComplete = null;
-        winnerBlueAnim.StartAnimation();
+    // Restarts a clip for a single pass. doLoopAnimation and onLoopComplete are written every time
+    // rather than assumed: these components are reused, so an unwritten flag is whatever the last
+    // caller left behind.
+    private static void PlayOneShot(ImageAnimation animation)
+    {
+        if (animation == null) return;
+
+        animation.doLoopAnimation = false;
+        animation.onLoopComplete = null;
+        animation.StartAnimation();
     }
 
     // startingTotal, not the round win: Blue opens EMPTY and the walk fills it one Orb at a time.
@@ -863,15 +881,26 @@ public class HoldAndSpinView : MonoBehaviour
             winnerBlueAnim.onLoopComplete = null;
             winnerBlueAnim.StopAnimation();
         }
+
+        // The burst behind it starts from rest too — it fires with the holder, never before it.
+        if (winnerBlueBurstAnim != null)
+        {
+            winnerBlueBurstAnim.doLoopAnimation = false;
+            winnerBlueBurstAnim.onLoopComplete = null;
+            winnerBlueBurstAnim.StopAnimation();
+        }
     }
 
     private void ShowWinnerRed()
     {
         if (winnerBlueAnim != null) winnerBlueAnim.StopAnimation();
+        if (winnerBlueBurstAnim != null) winnerBlueBurstAnim.StopAnimation();
         if (winnerBlue != null) winnerBlue.SetActive(false);
 
         if (winnerRed != null) winnerRed.SetActive(true);
         if (winnerRedText != null) winnerRedText.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
+
+        AudioManager.Instance?.PlayWinnerAnimation();
 
         // Already on screen since Blue — this is where it starts MOVING. Kept as a SetActive too so
         // the method still stands alone if the outro order ever changes.
@@ -952,6 +981,7 @@ public class HoldAndSpinView : MonoBehaviour
     private void StopPayoutAnimations()
     {
         if (winnerBlueAnim != null) winnerBlueAnim.StopAnimation();
+        if (winnerBlueBurstAnim != null) winnerBlueBurstAnim.StopAnimation();
         if (winnerGraphicAnim != null) winnerGraphicAnim.StopAnimation();
 
         if (redEffectAnims == null) return;

@@ -42,14 +42,14 @@ public class FreeGameView : MonoBehaviour
     [SerializeField] private TMPro.TMP_Text totalFreeSpins;
 
     [Header("Closing Summary")]
-    [Tooltip("The graphic shown at the end of a round, holding the total-win counter.")]
-    [SerializeField] private GameObject freeGamesOver;
-    [SerializeField] private CanvasGroup freeGamesOverGroup;
+    [Tooltip("CongratulationsPanel in the scene: the panel shown at the end of a round, holding the total-win counter.")]
+    [SerializeField] private GameObject congratulationsPanel;
+    [SerializeField] private CanvasGroup congratulationsPanelGroup;
     [SerializeField] private TMPro.TMP_Text freeGamesWinAmount;
     [Tooltip("Optional clip on the summary graphic. Started when the summary appears and stopped " +
              "when it fades. Its frames, speed and loop flag are the component's own — unlike the " +
              "symbol animations, the code does not own this clip and only starts and stops it.")]
-    [SerializeField] private ImageAnimation freeGamesOverAnim;
+    [SerializeField] private ImageAnimation congratulationsPanelAnim;
 
     [Header("Overlays")]
     [Tooltip("The 'top' parent holding the payout values. Faded to 0 and back during the closing sequence.")]
@@ -177,15 +177,15 @@ public class FreeGameView : MonoBehaviour
         if (counterTween != null) { counterTween.Kill(); counterTween = null; }
         if (totalWinTween != null) { totalWinTween.Kill(); totalWinTween = null; }
 
-        if (freeGamesOverAnim != null) freeGamesOverAnim.StopAnimation();
+        if (congratulationsPanelAnim != null) congratulationsPanelAnim.StopAnimation();
 
         ShowPanelState(prompt: false, remaining: false, completed: false);
         if (freeGamesTexts != null) freeGamesTexts.SetActive(false);
-        if (freeGamesOver != null) freeGamesOver.SetActive(false);
+        if (congratulationsPanel != null) congratulationsPanel.SetActive(false);
 
         if (pressStartFeatureGroup != null) pressStartFeatureGroup.alpha = 1f;
         SetGroupAlpha(freeGamesTextsGroup, 0f, false);
-        SetGroupAlpha(freeGamesOverGroup, 0f, false);
+        SetGroupAlpha(congratulationsPanelGroup, 0f, false);
         SetGroupAlpha(darkOverlayGroup, 0f, false);
         SetGroupAlpha(fadeToBlackGroup, 0f, false);
         SetGroupAlpha(topGroup, 1f, true);
@@ -296,16 +296,26 @@ public class FreeGameView : MonoBehaviour
         // 2. Everything fades back in.
         if (topGroup != null) yield return topGroup.DOFade(1f, overlayFadeDuration).WaitForCompletion();
 
-        // 3. The counter gives way to the completion notice.
+        // 3. The counter gives way to the completion notice, with its own cue playing alone.
         ShowPanelState(prompt: false, remaining: false, completed: true);
         SetGroupAlpha(freeGamesTextsGroup, 1f, true);
+
+        // 3b. The completion cue owns this beat on its own — the congratulations panel and its cue
+        //     wait it out rather than landing on top of it. The wait is the clip's own length, not a
+        //     number typed here, so replacing the audio re-times this automatically.
+        float completeCueLength = AudioManager.Instance != null
+            ? AudioManager.Instance.PlayFreeGamesComplete()
+            : 0f;
+
+        if (completeCueLength > 0f) yield return new WaitForSeconds(completeCueLength);
 
         // 4. FreeGamesOver appears, and its clip starts with it. Started explicitly rather than
         //    left to the component's StartOnEnable, so the sequence owns the timing and a change
         //    to that checkbox cannot silently turn the animation off.
-        if (freeGamesOver != null) freeGamesOver.SetActive(true);
-        SetGroupAlpha(freeGamesOverGroup, 1f, true);
-        if (freeGamesOverAnim != null) freeGamesOverAnim.StartAnimation();
+        AudioManager.Instance?.PlayCongratulations();
+        if (congratulationsPanel != null) congratulationsPanel.SetActive(true);
+        SetGroupAlpha(congratulationsPanelGroup, 1f, true);
+        if (congratulationsPanelAnim != null) congratulationsPanelAnim.StartAnimation();
         if (freeGamesWinAmount != null) freeGamesWinAmount.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
 
         yield return new WaitForSeconds(summaryHoldBeforeCountUp);
@@ -346,7 +356,7 @@ public class FreeGameView : MonoBehaviour
 
     private IEnumerator FadeOutRoundElements()
     {
-        Tween summaryOut = freeGamesOverGroup != null ? freeGamesOverGroup.DOFade(0f, overlayFadeDuration) : null;
+        Tween summaryOut = congratulationsPanelGroup != null ? congratulationsPanelGroup.DOFade(0f, overlayFadeDuration) : null;
         Tween counterOut = freeGamesTextsGroup != null ? freeGamesTextsGroup.DOFade(0f, overlayFadeDuration) : null;
         Tween overlayOut = darkOverlayGroup != null ? darkOverlayGroup.DOFade(0f, overlayFadeDuration) : null;
 
@@ -357,9 +367,9 @@ public class FreeGameView : MonoBehaviour
 
         // Stopped explicitly: ImageAnimation drives itself with Invoke, so deactivating the object
         // is not a reliable way to end a looping clip.
-        if (freeGamesOverAnim != null) freeGamesOverAnim.StopAnimation();
+        if (congratulationsPanelAnim != null) congratulationsPanelAnim.StopAnimation();
 
-        if (freeGamesOver != null) freeGamesOver.SetActive(false);
+        if (congratulationsPanel != null) congratulationsPanel.SetActive(false);
         ShowPanelState(prompt: false, remaining: false, completed: false);
         if (freeGamesTexts != null) freeGamesTexts.SetActive(false);
         if (darkOverlayGroup != null) darkOverlayGroup.gameObject.SetActive(false);

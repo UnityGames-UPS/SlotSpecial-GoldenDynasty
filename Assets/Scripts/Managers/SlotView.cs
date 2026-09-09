@@ -118,6 +118,9 @@ public class SlotView : MonoBehaviour
     [Tooltip("Wild drawn as THREE stacked Wilds, for a full column of winning Wilds. Empty = falls back to single animations the same way.")]
     [SerializeField] private List<Sprite> animSpritesWild3;
 
+    [Tooltip("One-shot played on an Orb as its dragon lifts off, bridging the feature clip and the base clip. Empty = the Orb cuts straight to its base animation as before.")]
+    [SerializeField] private List<Sprite> animSpritesOrbCollect;
+
     // Internal array of animation sprite lists
     private List<Sprite>[] animationSpriteArrays;
 
@@ -1351,6 +1354,10 @@ public class SlotView : MonoBehaviour
         // Nothing renders until the end of the frame, so all of this lands at once.
         WriteRevealedSymbolsUnderMystery(positions);
 
+        // ONE cue for the whole reveal, outside the loop below. A spin can reveal up to fifteen
+        // cells on the same frame, and a per-door call would stack fifteen copies of the same clip.
+        AudioManager.Instance?.PlayMysteryDoorOpen();
+
         foreach (var imageAnim in activeAnims)
         {
             imageAnim.StartAnimation();
@@ -1520,6 +1527,10 @@ public class SlotView : MonoBehaviour
                         slot.pulseTween = null;
                     }
 
+                    // A pending collect hand-over would start the base clip on this slot a frame
+                    // after it was cleared.
+                    StopOrbTransition(slot);
+
                     if (slot.animation != null)
                     {
                         slot.animation.StopAnimation();
@@ -1592,7 +1603,12 @@ public class SlotView : MonoBehaviour
     {
         if (slot == null) return;
 
-        ApplyOrbPulse(slot, feature);
+        // Any collect one-shot waiting to hand over is stale the moment something else writes this
+        // slot — it would otherwise fire a frame later and overwrite whatever was just set.
+        StopOrbTransition(slot);
+
+        // Base game pulses, feature does not.
+        SetOrbPulse(slot, !feature);
 
         ImageAnimation imageAnim = slot.animation;
         if (imageAnim == null) return;
@@ -1631,7 +1647,7 @@ public class SlotView : MonoBehaviour
     //
     // Always resets to white first. Killing a yoyo mid-cycle leaves the Image on whatever tint it
     // had reached, and nothing downstream restores it — see the note in WriteOrbSlot.
-    private void ApplyOrbPulse(OrbSlot slot, bool feature)
+    private void SetOrbPulse(OrbSlot slot, bool pulsing)
     {
         if (slot.pulseTween != null)
         {
@@ -1645,8 +1661,8 @@ public class SlotView : MonoBehaviour
         Color white = new Color(1f, 1f, 1f, slotImage.color.a);
         slotImage.color = white;
 
-        // No pulse during the feature, and none for a tint that would do nothing anyway.
-        if (feature || orbPulseDuration <= 0f) return;
+        // Nothing to do when the pulse is off, or for a tint that would do nothing anyway.
+        if (!pulsing || orbPulseDuration <= 0f) return;
 
         Color tint = new Color(orbPulseTint.r, orbPulseTint.g, orbPulseTint.b, slotImage.color.a);
         if (tint == white) return;
@@ -1658,7 +1674,76 @@ public class SlotView : MonoBehaviour
     }
 
     /// <summary>
-    /// Switches ONE Orb's animation between its base-game and Hold & Spin variants, leaving the
+    /// The beat between an Orb's two animations: a one-shot played as its dragon lifts off, which
+    /// hands over to the base clip when it finishes.
+    ///
+    /// Without a collect clip wired this is exactly the old behaviour — straight to the base
+    /// animation — so the walk works the same either way.
+    /// </summary>
+    internal void PlayOrbCollectTransition(int flatIndex)
+    {
+        OrbSlot slot = ResolveOrbSlot(flatIndex);
+        if (slot?.image == null || !slot.image.gameObject.activeSelf) return;
+
+        ImageAnimation imageAnim = slot.animation;
+        int orbId = OrbSymbolId;
+
+        if (imageAnim == null || orbId < 0 || animSpritesOrbCollect == null || animSpritesOrbCollect.Count == 0)
+        {
+            PlayOrbAnimation(slot, false);
+            return;
+        }
+
+        StopOrbTransition(slot);
+
+        // No pulse while the collect clip runs. The flash belongs to an Orb sitting idle in the base
+        // game, not to one being taken off the board.
+        SetOrbPulse(slot, false);
+
+        imageAnim.textureArray = animSpritesOrbCollect;
+        imageAnim.doLoopAnimation = false;
+        imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(orbId);
+
+        imageAnim.onLoopComplete = (loop) =>
+        {
+            if (loop < 1) return;
+
+            // StopAnimation here rather than starting the base clip directly: it leaves the state
+            // NONE, which is what makes ImageAnimation's own scheduling bail out after this callback
+            // returns instead of queueing another frame.
+            imageAnim.onLoopComplete = null;
+            imageAnim.StopAnimation();
+
+            slot.transitionRoutine = StartCoroutine(StartBaseOrbAnimationNextFrame(slot));
+        };
+
+        imageAnim.StartAnimation();
+    }
+
+    // Deferred by one frame, deliberately. Starting the base clip from inside onLoopComplete would
+    // set the state back to PLAYING before ImageAnimation finished its own post-callback bookkeeping,
+    // so it would schedule a second frame on top of the one StartAnimation just scheduled and the
+    // base animation would run at double speed.
+    private IEnumerator StartBaseOrbAnimationNextFrame(OrbSlot slot)
+    {
+        yield return null;
+
+        if (slot == null) yield break;
+
+        slot.transitionRoutine = null;
+        PlayOrbAnimation(slot, false);
+    }
+
+    private void StopOrbTransition(OrbSlot slot)
+    {
+        if (slot?.transitionRoutine == null) return;
+
+        StopCoroutine(slot.transitionRoutine);
+        slot.transitionRoutine = null;
+    }
+
+    /// <summary>
+    /// Switches ONE Orb's animation between its base-game and Hold &amp; Spin variants, leaving the
     /// sprite and the prize alone. Used by the payout walk to revert each Orb as its dragon lifts
     /// off, which is also the only feedback that an Orb has been collected.
     ///
@@ -2669,6 +2754,10 @@ public class OrbSlot
     // The base-game saturation pulse. Held per slot rather than killed with image.DOKill() so that
     // stopping the pulse cannot take an unrelated tween on the same Image down with it.
     [System.NonSerialized] public Tween pulseTween;
+
+    // Waits out the collect one-shot before the base clip starts. Held so a round ending mid-flight
+    // can cancel it — otherwise it would start an animation on a slot that had just been cleared.
+    [System.NonSerialized] public Coroutine transitionRoutine;
 }
 
 // One reel column's worth of Orb slots — 3 rows, matching the grid, same shape as AnimSlotColumn.
