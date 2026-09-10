@@ -56,7 +56,7 @@ public class SlotView : MonoBehaviour
         { 7, LargeSymbolSize },          // Drum
         { 1, LargeSymbolSize },           // Scatter
         { 3, new Vector2(250f, 250f) },   // Mystery
-        { 2, new Vector2(250f, 250f) }   // Orb
+        { 2, new Vector2(300f, 300f) }   // Orb
     };
 
     // Playback speed per symbol, applied wherever that symbol's clip is assigned.
@@ -76,18 +76,18 @@ public class SlotView : MonoBehaviour
     private static readonly Dictionary<int, float> SymbolAnimationSpeeds = new Dictionary<int, float>
     {
         { 0,  25f },  // Wild
-        { 1,  90f },  // Scatter
+        { 1,  64f },  // Scatter
         { 2,  30f },  // Orb
         { 3,  35f },  // Mystery
-        { 4,  40f },  // Warriors
-        { 5,  25f },  // Lady
-        { 6,  20f },  // Book
-        { 7,  50f },  // Drum
+        { 4,  33f },  // Warriors
+        { 5,  86f },  // Lady
+        { 6,  30f },  // Book
+        { 7,  86f },  // Drum
         { 8,  10f },  // A
-        { 9,  15f },  // K
+        { 9,  20f },  // K
         { 10, 15f },  // Q
-        { 11, 15f },  // J
-        { 12, 15f }   // 10
+        { 11, 20f },  // J
+        { 12, 13f }   // 10
     };
 
     // Internal array built from named sprites
@@ -193,10 +193,10 @@ public class SlotView : MonoBehaviour
     [SerializeField] private int winSymbolLoopCount = 3;
 
     // The shape of the win presentation: the total plays every winning symbol twice in step, then
-    // the win lines are walked twice with each line playing once, then the total comes back and
+    // the win lines are walked ONCE with each line playing once, then the total comes back and
     // holds, looping, until the next spin.
     private const int totalWinRounds = 2;
-    private const int winLinePassCount = 2;
+    private const int winLinePassCount = 1;
     private const int winLineRounds = 1;
     [Tooltip("Delay between enabling winBox overlay and starting the ImageAnimation - for sync timing")]
     [SerializeField] private float winLineBoxToAnimationDelay = 0.05f;
@@ -1342,7 +1342,12 @@ public class SlotView : MonoBehaviour
             if (imageAnim == null) continue;
 
             imageAnim.textureArray = revealFrames;
-            imageAnim.doLoopAnimation = true;
+
+            // NOT looping. A door opens once, and letting it stop on its own leaves it resting on
+            // its LAST frame — the open door. Forcing it to stop instead rewound the sprite to
+            // textureArray[0], the CLOSED door, which then sat there until the wait below noticed
+            // every door had finished and hid the layer a frame later. That was the flash.
+            imageAnim.doLoopAnimation = false;
             imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(mysteryId);
 
             activeAnims.Add(imageAnim);
@@ -1352,8 +1357,9 @@ public class SlotView : MonoBehaviour
                 // One pass only — a door opens once, it doesn't loop.
                 if (currentLoop >= 1)
                 {
+                    // Deliberately NOT StopAnimation: that rewinds to frame 0. doLoopAnimation is
+                    // false, so it has already stopped itself on the open frame.
                     imageAnim.onLoopComplete = null;
-                    imageAnim.StopAnimation();
 
                     completedCount++;
                     if (completedCount >= activeAnims.Count)
@@ -1442,6 +1448,32 @@ public class SlotView : MonoBehaviour
         // The override has served its purpose: any later write this spin should use the real
         // symbols, not put the Mystery back.
         mysteryCells.Clear();
+
+        // Now that the cells are no longer pending, any Orb they revealed can go onto the Orb layer.
+        // Same frame as the symbols above, and for the same reason: the doors are shut over these
+        // cells right now, so none of it is seen going in.
+        RevealOrbsUnderMystery(positions);
+    }
+
+    // The Orbs a Mystery reveal uncovered. Only reachable once mysteryCells has been cleared —
+    // WriteOrbSlot refuses to draw a cell that is still pending.
+    private void RevealOrbsUnderMystery(List<int> positions)
+    {
+        if (positions == null || pendingOrbPrizes.Count == 0) return;
+
+        bool anyDrawn = false;
+
+        foreach (int flatIndex in positions)
+        {
+            if (!pendingOrbPrizes.TryGetValue(flatIndex, out double prize)) continue;
+
+            // The layer is raised only if one of these cells actually is an Orb, so a reveal with
+            // none in it does not switch on an empty layer.
+            if (!anyDrawn && orbLayerRoot != null) orbLayerRoot.SetActive(true);
+            anyDrawn = true;
+
+            WriteOrbSlot(flatIndex, prize);
+        }
     }
 
     private void HideMysterySlots()
@@ -1592,6 +1624,17 @@ public class SlotView : MonoBehaviour
     // how the rest of the game already reads.
     private void WriteOrbSlot(int flatIndex, double prize)
     {
+        // A cell that landed as a Mystery must not show what it revealed into — and an Orb on the
+        // Orb layer is exactly that. The reel icons already had this override; the Orb layer did
+        // not, so a Mystery hiding an Orb drew the Orb on its reel's landing while the doors, which
+        // only appear once EVERY reel has stopped, were still to come. The Orb was on screen before
+        // the door that was supposed to be concealing it.
+        //
+        // Guarded here rather than in DrawOrbsForColumn because every path to the layer funnels
+        // through this one method. RevealOrbsUnderMystery draws them the moment the doors close
+        // over them.
+        if (mysteryCells.Contains(flatIndex)) return;
+
         OrbSlot slot = ResolveOrbSlot(flatIndex);
         if (slot?.image == null) return;
 
@@ -2058,8 +2101,9 @@ public class SlotView : MonoBehaviour
     // StartSpin.
     private IEnumerator PlayWinLineCycleRoutine(List<WinLine> winLines, HashSet<int> allWinPositions, double totalWinAmount)
     {
-        // Twice through every line, each line playing its symbols once in step. Bounded, unlike the
-        // old cycle: what loops at the end is the TOTAL, not the lines.
+        // Once through every line, each line playing its symbols once in step. Bounded, unlike the
+        // old cycle: what loops at the end is the TOTAL, not the lines. Kept as a loop rather than a
+        // straight pass so the count stays a single constant to change.
         for (int pass = 0; pass < winLinePassCount; pass++)
         {
             foreach (var winLine in winLines)
