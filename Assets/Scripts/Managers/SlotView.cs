@@ -327,6 +327,12 @@ public class SlotView : MonoBehaviour
         ? gameManager.gameConfig.orbSymbolId
         : -1;
 
+    // -1 rather than 0 when unknown, deliberately: 0 IS the Wild's id in this game, so a literal
+    // fallback would silently match every symbol lookup before init.
+    private int WildSymbolId => (gameManager != null && gameManager.gameConfig != null)
+        ? gameManager.gameConfig.wildSymbolId
+        : -1;
+
     #region Initialization
 
     
@@ -1016,27 +1022,35 @@ public class SlotView : MonoBehaviour
         // ── Play reel-stop sound immediately when symbols lock in ──────────
         AudioManager.Instance?.PlayReelStop();
 
-        // Special-symbol landing cues for this column. Both fire at most once per reel, not once
-        // per symbol.
+        // Special-symbol landing cues for this column. Both fire at most once per REEL, not once per
+        // symbol — three Orbs in one column is one cue, not three. A quick stop lands every reel on
+        // the same frame, so up to five Orb cues can overlap there; that is accepted.
+        //
+        // The Wild deliberately has no landing cue in this game. It is announced when it ANIMATES,
+        // which only happens if it is part of a win.
         if (currentDisplayMatrix != null && columnIndex < currentDisplayMatrix.Count)
         {
-            bool hasWild = false;
-            bool hasBonus = false;
-            int wildId = gameManager?.gameConfig != null ? gameManager.gameConfig.wildSymbolId : 1;
-            int bonusId = gameManager?.gameConfig != null ? gameManager.gameConfig.scatterSymbolId : 0;
+            bool hasScatter = false;
+            bool hasOrb = false;
+
+            // No literal fallbacks. The old ones were 1 for Wild and 0 for Scatter, which are this
+            // game's ids the wrong way round — correct-looking and silently inverted.
+            int scatterId = gameManager != null && gameManager.gameConfig != null ? gameManager.gameConfig.scatterSymbolId : -1;
+            int orbId = OrbSymbolId;
+
             var column = currentDisplayMatrix[columnIndex];
             int rowEnd = Mathf.Min(RowCount, column.Count);
 
             for (int r = 0; r < rowEnd; r++)
             {
-                if (column[r] == wildId) hasWild = true;
-                else if (column[r] == bonusId) hasBonus = true;
+                if (column[r] == scatterId) hasScatter = true;
+                else if (column[r] == orbId) hasOrb = true;
 
-                if (hasWild && hasBonus) break;
+                if (hasScatter && hasOrb) break;
             }
 
-            if (hasWild) AudioManager.Instance?.PlayWildLand();
-            if (hasBonus) AudioManager.Instance?.PlayBonusLand();
+            if (hasScatter) AudioManager.Instance?.PlayScatterLand();
+            if (hasOrb) AudioManager.Instance?.PlayOrbLand();
         }
         // ──────────────────────────────────────────────────────────────────
 
@@ -1974,10 +1988,10 @@ public class SlotView : MonoBehaviour
         // Show Phase 1 Total Win Text with final win value
         ShowPhase1TotalWin(totalWinAmount);
 
-        AudioManager.Instance?.PlayWinLinePhase1Start();
+        AudioManager.Instance?.PlayWinPresentationStart();
 
         // Animate all winning symbols and wait for their ImageAnimation loops to complete
-        yield return StartCoroutine(AnimateWinPositions(allWinPositions));
+        yield return StartCoroutine(AnimateWinPositions(allWinPositions, announceWilds: true));
 
         KillWinTweens(false);
         HidePhase1TotalWinText();
@@ -2026,6 +2040,7 @@ public class SlotView : MonoBehaviour
 
                 // Lines are a Phase 2 thing only — Phase 1 shows every winning symbol at once
                 // with no line drawn, then this cycle walks them one at a time.
+                AudioManager.Instance?.PlayWinLineChange();
                 ShowWinLine(winLine.lineId, winLine.winAmount);
 
                 // Animate win line symbols and wait for their ImageAnimation loops to complete
@@ -2220,9 +2235,16 @@ public class SlotView : MonoBehaviour
         slot.image.gameObject.SetActive(false);
     }
 
-    private IEnumerator AnimateWinPositions(IEnumerable<int> flatPositions)
+    /// <param name="announceWilds">
+    /// True only from Phase 1. The Wild cue is once per spin, and Phase 2 cycles its lines forever
+    /// until the player spins again — so firing it there would replay the cue on every pass, for as
+    /// long as the player sat looking at the result.
+    /// </param>
+    private IEnumerator AnimateWinPositions(IEnumerable<int> flatPositions, bool announceWilds = false)
     {
         if (flatPositions == null) yield break;
+
+        bool wildAnnounced = false;
 
         int rowLimit = (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.rowCount : 3;
         int loopCountTarget = (gameManager != null && (gameManager.isInFreeSpins || gameManager.isAutoPlaying)) ? 1 : winSymbolLoopCount;
@@ -2282,6 +2304,13 @@ public class SlotView : MonoBehaviour
             }
 
             bool isStackAnchor = wildRunAnchors.TryGetValue(flatIndex, out int stackHeight);
+
+            // Once per spin, however many Wilds are winning and whether or not they are stacked.
+            if (announceWilds && !wildAnnounced && symbolId == WildSymbolId)
+            {
+                wildAnnounced = true;
+                AudioManager.Instance?.PlayWildAnimate();
+            }
 
             // Show the symbol first, unconditionally. Some symbols have no animation frames at all
             // (their anim list is left empty), and under the dim a skipped slot would leave a

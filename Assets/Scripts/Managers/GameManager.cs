@@ -465,7 +465,7 @@ public class GameManager : MonoBehaviour
         retriggerTotalBefore = -1;
 
 
-        AudioManager.Instance?.Play3UspinWinLineLoop();
+        AudioManager.Instance?.PlayScatterTrigger();
         if (slotView != null) slotView.AnimateAllScatters(scatterTriggerLoops);
 
         yield return new WaitForSeconds(scatterTriggerHold);
@@ -492,7 +492,7 @@ public class GameManager : MonoBehaviour
     private IEnumerator DelayScatterTriggerResult()
     {
         // Play special feature trigger sound AFTER all reels have stopped
-        AudioManager.Instance?.Play3UspinWinLineLoop();
+        AudioManager.Instance?.PlayScatterTrigger();
 
         // Animate the scatters indefinitely (0 = no self-stop) so they keep playing behind the
         // award prompt while the player decides to press Start. The first free spin's StartSpin

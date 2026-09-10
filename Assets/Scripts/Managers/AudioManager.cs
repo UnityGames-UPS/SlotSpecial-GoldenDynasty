@@ -42,8 +42,8 @@ public class AudioManager : MonoBehaviour
     [SerializeField] private AudioClip clipGameMainBg;
     [SerializeField] private AudioClip clipBetPlusMinus;
     [SerializeField] private AudioClip clipMaxBetReached;
-    [SerializeField] private AudioClip clip3UspinWinLineLoop;
-    [SerializeField] private AudioClip clipWinObjectBg;
+    [SerializeField] private AudioClip clipScatterTrigger;
+    [SerializeField] private AudioClip clipBigWin;
     [Tooltip("Spin button only. Stop / Take / AutoplayStop share clipPrimaryActionButton below.")]
     [SerializeField] private AudioClip clipSpinStart;
     [SerializeField] private AudioClip clipPrimaryActionButton;
@@ -51,12 +51,10 @@ public class AudioManager : MonoBehaviour
     [SerializeField] private AudioClip clipPopupOpenClose;
     [SerializeField] private AudioClip clipAutoplayPanelOpen;
     [SerializeField] private AudioClip clipFreeSpinBg;
-    [SerializeField] private AudioClip clipWinLinePhase1Start;
+    [SerializeField] private AudioClip clipWinPresentationStart;
     [SerializeField] private AudioClip clipReelStop;
-    [Tooltip("Plays once for any reel that lands at least one wild in the active rows.")]
-    [SerializeField] private AudioClip clipWildLand;
-    [Tooltip("Plays once for any reel that lands at least one bonus in the active rows.")]
-    [SerializeField] private AudioClip clipBonusLand;
+    [Tooltip("One shot per reel that lands at least one Scatter. Currently UNASSIGNED and silent - kept because the call site is guarded and may be wanted again.")]
+    [SerializeField] private AudioClip clipScatterLand;
     [SerializeField] private AudioClip clipTurboButton;
 
     [Header("Audio Clips - Golden Dynasty")]
@@ -71,6 +69,30 @@ public class AudioManager : MonoBehaviour
 
     [Tooltip("Plays with the CongratulationsPanel, after clipFreeGamesComplete has finished.")]
     [SerializeField] private AudioClip clipCongratulations;
+
+    [Tooltip("Phase 2 of the win presentation moving to the next win line. Fires on every change, and Phase 2 cycles until the player spins.")]
+    [SerializeField] private AudioClip clipWinLineChange;
+
+    [Tooltip("An Orb landing on a BASE-GAME reel. One shot per reel that contains at least one.")]
+    [SerializeField] private AudioClip clipOrbLand;
+
+    [Tooltip("An Orb landing during a Hold & Spin round. The feature's own counterpart to clipOrbLand.")]
+    [SerializeField] private AudioClip clipOrbLandFeature;
+
+    [Tooltip("6+ Orbs — the Hold & Spin trigger. Plays after every Orb has landed and BEFORE the full-screen intro.")]
+    [SerializeField] private AudioClip clipHoldAndSpinTrigger;
+
+    [Tooltip("Plays with the Hold & Spin full-screen intro animation, straight after clipHoldAndSpinTrigger.")]
+    [SerializeField] private AudioClip clipHoldAndSpinIntro;
+
+    [Tooltip("A Wild ANIMATING as part of a win — once per spin, in Phase 1 only. Wild landings have no cue.")]
+    [SerializeField] private AudioClip clipWildAnimate;
+
+    [Tooltip("One dragon leaving its Orb during the Hold & Spin payout walk. Fires per dragon.")]
+    [SerializeField] private AudioClip clipDragonLeaveOrb;
+
+    [Tooltip("The win amount counting up in the universal win popup.")]
+    [SerializeField] private AudioClip clipWinCountUp;
 
     private bool _musicEnabled = true;
     private bool _sfxEnabled   = true;
@@ -198,28 +220,28 @@ public class AudioManager : MonoBehaviour
     // through PlayLoop, which sets loop = true, and the matching Stop method had no callers — so the
     // clip repeated for the rest of the session from the moment free games triggered. PlayUISound
     // already null-guards and honours _sfxEnabled, so no guard is needed here.
-    internal void Play3UspinWinLineLoop()
+    internal void PlayScatterTrigger()
     {
-        PlayUISound(clip3UspinWinLineLoop);
+        PlayUISound(clipScatterTrigger);
     }
 
     // 5. Win Object BG (Play at Open)
-    internal void PlayWinObjectBg()
+    internal void PlayBigWin()
     {
-        if (!_sfxEnabled || clipWinObjectBg == null) return;
+        if (!_sfxEnabled || clipBigWin == null) return;
         // PlaySfxLoop, not PlayLoop: this is an effect, not a music bed. PlayLoop stamps the source
         // with the *music* volume and StopSource never restores it, so every later UI sound on
         // uiSource kept playing at music level until something touched a volume slider.
-        PlaySfxLoop(uiSource, clipWinObjectBg);
+        PlaySfxLoop(uiSource, clipBigWin);
     }
 
-    internal void StopWinObjectBg()
+    internal void StopBigWin()
     {
-        if (uiSource != null && uiSource.clip == clipWinObjectBg)
+        if (uiSource != null && uiSource.clip == clipBigWin)
         {
             StopSource(uiSource);
         }
-        if (reserveSource != null && reserveSource.clip == clipWinObjectBg)
+        if (reserveSource != null && reserveSource.clip == clipBigWin)
         {
             StopSource(reserveSource);
         }
@@ -290,9 +312,9 @@ public class AudioManager : MonoBehaviour
     }
 
     // 13. Win Line Phase 1 Start
-    internal void PlayWinLinePhase1Start()
+    internal void PlayWinPresentationStart()
     {
-        PlayUISound(clipWinLinePhase1Start);
+        PlayUISound(clipWinPresentationStart);
     }
 
     // 14. Slot Reel Column Stop Sound
@@ -306,14 +328,22 @@ public class AudioManager : MonoBehaviour
             PlayUISound(clipReelStop);
     }
 
-    // 15. Special symbol landings — one shot per reel that contains at least one, not per symbol.
-    internal void PlayWildLand()  => PlayUISound(clipWildLand);
-    internal void PlayBonusLand() => PlayUISound(clipBonusLand);
+    // 15. Scatter landing — one shot per reel that contains at least one, not per symbol. Wild
+    // landings deliberately have NO cue in this game: the Wild is announced when it animates.
+    internal void PlayScatterLand() => PlayUISound(clipScatterLand);
 
     // 16. Turbo / spin-speed toggle
     internal void PlayTurboButton() => PlayUISound(clipTurboButton);
 
     // 17. Golden Dynasty cues.
+    internal void PlayWinLineChange()      => PlayUISound(clipWinLineChange);
+    internal void PlayOrbLand()            => PlayUISound(clipOrbLand);
+    internal void PlayOrbLandFeature()     => PlayUISound(clipOrbLandFeature);
+    internal void PlayHoldAndSpinTrigger() => PlayUISound(clipHoldAndSpinTrigger);
+    internal void PlayHoldAndSpinIntro()   => PlayUISound(clipHoldAndSpinIntro);
+    internal void PlayWildAnimate()        => PlayUISound(clipWildAnimate);
+    internal void PlayDragonLeaveOrb()     => PlayUISound(clipDragonLeaveOrb);
+    internal void PlayWinCountUp()         => PlayUISound(clipWinCountUp);
     internal void PlayMysteryDoorOpen() => PlayUISound(clipMysteryDoorOpen);
     internal void PlayWinnerAnimation() => PlayUISound(clipWinnerAnimation);
     internal void PlayCongratulations() => PlayUISound(clipCongratulations);

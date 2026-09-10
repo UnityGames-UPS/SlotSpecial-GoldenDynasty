@@ -374,11 +374,16 @@ public class HoldAndSpinView : MonoBehaviour
         //    down behind the closing blackout, never visibly.
         if (slotView != null) slotView.SetFeatureDim(true);
 
+        // Every triggering Orb has already landed by the time this routine runs, so this is the
+        // "6+ Orbs" cue — one for the whole trigger, played BEFORE the intro rather than with it.
+        AudioManager.Instance?.PlayHoldAndSpinTrigger();
+
         yield return new WaitForSeconds(triggerOrbHold);
 
         // 2. Full-screen animation.
         if (fullScreenIntro != null)
         {
+            AudioManager.Instance?.PlayHoldAndSpinIntro();
             fullScreenIntro.SetActive(true);
             yield return WaitForImageAnimation(fullScreenIntro);
             fullScreenIntro.SetActive(false);
@@ -516,6 +521,7 @@ public class HoldAndSpinView : MonoBehaviour
                     // — the player never sees the gap between the two.
                     BlankHeldCell(cell);
 
+                    AudioManager.Instance?.PlayOrbLandFeature();
                     if (slotView != null) slotView.HoldOrb(flatIndex, prize);
                     UpdateCounters(spinsRemaining);
                 }
@@ -788,6 +794,8 @@ public class HoldAndSpinView : MonoBehaviour
 
             // Only the endpoints. The curve between them is the flyer's own business — its shape
             // lives on that component, where it can be tuned with the ribbon rather than in code.
+            AudioManager.Instance?.PlayDragonLeaveOrb();
+
             dragon.Fly(start, end, dragonFlightDuration,
                        () => arrived = true,
                        () => ready = true);
@@ -1130,7 +1138,9 @@ public class HoldAndSpinView : MonoBehaviour
 
         // Values only — what is visible is owned by SetRoundCountersVisible, so this cannot
         // accidentally raise a counter during the award prompt.
-        if (orbCountText != null) orbCountText.text = orbCount.ToString();
+        // Sprite digits, via ToSpriteDigits — a count, not an amount. The ghost below writes the SAME
+        // string, so the pop always renders in the font of the number it is popping off.
+        if (orbCountText != null) orbCountText.text = SpriteTextFormatter.ToSpriteDigits(orbCount.ToString());
 
         // ToSpriteDigits, NOT ToSpriteMoney: this is a count, not an amount. The money path would
         // put it through MoneyFormat and render 3 spins as "3.00".
@@ -1160,7 +1170,7 @@ public class HoldAndSpinView : MonoBehaviour
         // the new number at full size and full alpha, not carry the old pop's state into this one.
         StopOrbCountGhost();
 
-        if (orbCountGhostText != null) orbCountGhostText.text = orbCount.ToString();
+        if (orbCountGhostText != null) orbCountGhostText.text = SpriteTextFormatter.ToSpriteDigits(orbCount.ToString());
 
         orbCountGhostGroup.gameObject.SetActive(true);
 

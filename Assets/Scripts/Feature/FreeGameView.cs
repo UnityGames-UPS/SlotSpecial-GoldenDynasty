@@ -115,14 +115,20 @@ public class FreeGameView : MonoBehaviour
         activeSequence = StartCoroutine(CounterIntroRoutine(total, onComplete));
     }
 
+    // Both counters render in a sprite-digit font. ToSpriteDigits rather than ToSpriteMoney: these
+    // are counts, and the money path would force MoneyFormat and show 6 spins as "6.00". Every write
+    // goes through here — including each frame of the retrigger count-up — so no path can leave a
+    // plain-text digit on a sprite font.
+    private static string Digits(int count) => SpriteTextFormatter.ToSpriteDigits(count.ToString());
+
     /// <summary>Sets the counter with no animation. Called after every free spin.</summary>
     internal void UpdateCounter(int remaining, int total)
     {
         if (freeGamesTexts != null) freeGamesTexts.SetActive(true);
         ShowPanelState(prompt: false, remaining: true, completed: false);
 
-        if (remainingFreeSpins != null) remainingFreeSpins.text = remaining.ToString();
-        if (totalFreeSpins != null) totalFreeSpins.text = total.ToString();
+        if (remainingFreeSpins != null) remainingFreeSpins.text = Digits(remaining);
+        if (totalFreeSpins != null) totalFreeSpins.text = Digits(total);
     }
 
     /// <summary>
@@ -223,7 +229,7 @@ public class FreeGameView : MonoBehaviour
         if (freeGamesTexts != null) freeGamesTexts.SetActive(true);
         ShowPanelState(prompt: false, remaining: true, completed: false);
 
-        if (remainingFreeSpins != null) remainingFreeSpins.text = remaining.ToString();
+        if (remainingFreeSpins != null) remainingFreeSpins.text = Digits(remaining);
 
         if (totalFreeSpins == null) yield break;
 
@@ -232,10 +238,10 @@ public class FreeGameView : MonoBehaviour
 
         counterTween = DOVirtual.Int(fromTotal, toTotal, counterCountUpDuration, value =>
         {
-            if (totalFreeSpins != null) totalFreeSpins.text = value.ToString();
+            if (totalFreeSpins != null) totalFreeSpins.text = Digits(value);
         }).OnComplete(() =>
         {
-            if (totalFreeSpins != null) totalFreeSpins.text = toTotal.ToString();
+            if (totalFreeSpins != null) totalFreeSpins.text = Digits(toTotal);
             counterTween = null;
             done = true;
         });
