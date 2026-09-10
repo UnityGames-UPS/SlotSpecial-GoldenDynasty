@@ -322,7 +322,8 @@ public class FreeGameView : MonoBehaviour
         if (congratulationsPanel != null) congratulationsPanel.SetActive(true);
         SetGroupAlpha(congratulationsPanelGroup, 1f, true);
         if (congratulationsPanelAnim != null) congratulationsPanelAnim.StartAnimation();
-        if (freeGamesWinAmount != null) freeGamesWinAmount.text = 0d.ToString(SpriteTextFormatter.MoneyFormat);
+        // ToSpriteMoney, not ToSpriteDigits: this is an AMOUNT, so it keeps the shared 0.00 format.
+        if (freeGamesWinAmount != null) freeGamesWinAmount.text = SpriteTextFormatter.ToSpriteMoney(0);
 
         yield return new WaitForSeconds(summaryHoldBeforeCountUp);
 
@@ -334,10 +335,10 @@ public class FreeGameView : MonoBehaviour
 
             totalWinTween = DOVirtual.Float(0f, (float)roundWin, totalWinCountUpDuration, value =>
             {
-                if (freeGamesWinAmount != null) freeGamesWinAmount.text = value.ToString(SpriteTextFormatter.MoneyFormat);
+                if (freeGamesWinAmount != null) freeGamesWinAmount.text = SpriteTextFormatter.ToSpriteMoney(value);
             }).OnComplete(() =>
             {
-                if (freeGamesWinAmount != null) freeGamesWinAmount.text = roundWin.ToString(SpriteTextFormatter.MoneyFormat);
+                if (freeGamesWinAmount != null) freeGamesWinAmount.text = SpriteTextFormatter.ToSpriteMoney(roundWin);
                 totalWinTween = null;
                 countUpDone = true;
             });

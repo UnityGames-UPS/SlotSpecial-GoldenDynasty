@@ -191,6 +191,13 @@ public class SlotView : MonoBehaviour
     [SerializeField] private float winAnimationDuration = 3.0f; // Total duration each win symbol animation plays
     [SerializeField] private float winSymbolLoopDuration = 1.5f;
     [SerializeField] private int winSymbolLoopCount = 3;
+
+    // The shape of the win presentation: the total plays every winning symbol twice in step, then
+    // the win lines are walked twice with each line playing once, then the total comes back and
+    // holds, looping, until the next spin.
+    private const int totalWinRounds = 2;
+    private const int winLinePassCount = 2;
+    private const int winLineRounds = 1;
     [Tooltip("Delay between enabling winBox overlay and starting the ImageAnimation - for sync timing")]
     [SerializeField] private float winLineBoxToAnimationDelay = 0.05f;
 
@@ -201,8 +208,8 @@ public class SlotView : MonoBehaviour
     [SerializeField] private GameObject winAnimationLayer;
     [Tooltip("One entry per reel column, each holding the 3 active-row slots top to bottom.")]
     [SerializeField] private List<AnimSlotColumn> animSlotColumns = new List<AnimSlotColumn>(3);
-    [Tooltip("The 27 paylines, indexed directly by the server's lineIndex — element 0 is line 0. Shown one at a time during the Phase 2 cycle. Leave a field empty if its art doesn't exist yet; it's skipped with a warning naming the index.")]
-    [SerializeField] private WinLineVisual[] winLineVisuals = new WinLineVisual[27];
+    [Tooltip("The per-line win amount, ONE PER ROW, top to bottom — element 0 is the top row. This game draws no payline graphics: a line is shown by animating its symbols and putting its payout on the middle reel, so only three positions are ever needed for all 50 lines.")]
+    [SerializeField] private TMPro.TMP_Text[] winLineAmounts = new TMPro.TMP_Text[3];
 
     [Header("Mystery Reveal Layer")]
     [Tooltip("Root of the layer holding the Mystery symbols during their reveal. Sits ABOVE the win animation layer.")]
@@ -275,6 +282,13 @@ public class SlotView : MonoBehaviour
     // screen. See BeginWildStackFadeOut.
     private readonly HashSet<AnimSlot> stretchedStackSlots = new HashSet<AnimSlot>();
     private readonly HashSet<AnimSlot> fadingStackSlots = new HashSet<AnimSlot>();
+
+    // Every cell a stacked Wild is standing on — its anchor and the cells it covers above. A stack
+    // is PINNED for the whole win presentation: it survives the reset between Phase 1 and Phase 2
+    // and between every Phase 2 line, keeps looping, and only leaves when the next spin fades it.
+    // Phase 2 lines that pass through these cells leave them alone, or they would redraw the cell
+    // as a single Wild and un-stretch the stack.
+    private readonly HashSet<int> pinnedStackCells = new HashSet<int>();
 
     // How long a stacked Wild takes to fade once the player spins again. It fades over the already
     // spinning reels — the spin is never held up for it.
@@ -1906,8 +1920,12 @@ public class SlotView : MonoBehaviour
         // is already running. Restarting would double up the coroutine and strobe the lines.
         if (winAnimationCoroutine != null) return;
 
-        KillWinTweens();
-        winAnimationCoroutine = StartCoroutine(PlayWinLineCycleRoutine(lastWinLines));
+        // fadeStacks: false — this restarts the cycle for the SAME spin (the end of a Free Games
+        // round, or autoplay stopping), so its pinned stack stays up and keeps looping under it.
+        KillWinTweens(fadeStacks: false);
+
+        SummariseWinLines(lastWinLines, out HashSet<int> allWinPositions, out double totalWinAmount);
+        winAnimationCoroutine = StartCoroutine(PlayWinLineCycleRoutine(lastWinLines, allWinPositions, totalWinAmount));
     }
 
     private IEnumerator PlayTwoPhaseWinLines(List<WinLine> winLines, System.Action onComplete)
@@ -1985,24 +2003,31 @@ public class SlotView : MonoBehaviour
             totalWinAmount = gameManager.lastResult.winAmount;
         }
 
+        // Decided BEFORE the total plays, not after, because it now picks the round count too.
+        // Reading it later also made it a race: onComplete below can end a Free Games round, which
+        // clears isInFreeSpins, so the check could come out false on the very spin it was meant for.
+        //
+        // Trigger spins never reach here — they returned above.
+        bool skipPhase2 = gameManager != null
+            && (gameManager.isInFreeSpins || gameManager.isInHoldAndSpin || gameManager.isAutoPlaying);
+
         // Show Phase 1 Total Win Text with final win value
         ShowPhase1TotalWin(totalWinAmount);
 
         AudioManager.Instance?.PlayWinPresentationStart();
 
-        // Animate all winning symbols and wait for their ImageAnimation loops to complete
-        yield return StartCoroutine(AnimateWinPositions(allWinPositions, announceWilds: true));
+        // The total: every winning symbol, twice, in step. Autoplay and Free Games get a single
+        // round and end here — a full sequence on every spin would make a round crawl.
+        yield return StartCoroutine(AnimateWinPositions(
+            allWinPositions, rounds: skipPhase2 ? 1 : totalWinRounds, announceWilds: true));
 
         KillWinTweens(false);
         HidePhase1TotalWinText();
 
-        // Invoke onComplete immediately after Phase 1 so game logic (Free Spins / Autoplay / Win complete) can proceed
+        // Invoke onComplete immediately after the total so game logic (Free Spins / Autoplay / Win
+        // complete) can proceed while the win lines are still being walked.
         onComplete?.Invoke();
 
-        // Trigger spins never reach here — they returned above, before Phase 1 — so this is only
-        // about rounds already in progress and autoplay.
-        bool skipPhase2 = gameManager != null
-            && (gameManager.isInFreeSpins || gameManager.isInHoldAndSpin || gameManager.isAutoPlaying);
         if (skipPhase2)
         {
             // Take the presentation down on the way out. Mid-round this is invisible — the next
@@ -2015,11 +2040,14 @@ public class SlotView : MonoBehaviour
             // Presentation is genuinely over here, so any dim the Mystery reveal was holding is
             // released before the teardown rather than surviving it.
             ReleaseHeldDim();
-            KillWinTweens();
+
+            // fadeStacks: false — autoplay and Free Games skip Phase 2, but a pinned stack still
+            // stays until the NEXT spin, which here starts on its own a moment later.
+            KillWinTweens(fadeStacks: false);
             yield break;
         }
 
-        yield return PlayWinLineCycleRoutine(winLines);
+        yield return PlayWinLineCycleRoutine(winLines, allWinPositions, totalWinAmount);
     }
 
     // ==========================================
@@ -2028,9 +2056,11 @@ public class SlotView : MonoBehaviour
     // Split out of PlayTwoPhaseWinLines so the controller can start it on its own once an autoplay
     // or free-games round ends. Loops until something kills the coroutine — normally the next
     // StartSpin.
-    private IEnumerator PlayWinLineCycleRoutine(List<WinLine> winLines)
+    private IEnumerator PlayWinLineCycleRoutine(List<WinLine> winLines, HashSet<int> allWinPositions, double totalWinAmount)
     {
-        while (true)
+        // Twice through every line, each line playing its symbols once in step. Bounded, unlike the
+        // old cycle: what loops at the end is the TOTAL, not the lines.
+        for (int pass = 0; pass < winLinePassCount; pass++)
         {
             foreach (var winLine in winLines)
             {
@@ -2038,14 +2068,42 @@ public class SlotView : MonoBehaviour
 
                 KillWinTweens(false);
 
-                // Lines are a Phase 2 thing only — Phase 1 shows every winning symbol at once
-                // with no line drawn, then this cycle walks them one at a time.
+                // Lines are a Phase 2 thing only — the total shows every winning symbol at once with
+                // no line drawn, then this walks them one at a time.
                 AudioManager.Instance?.PlayWinLineChange();
-                ShowWinLine(winLine.lineId, winLine.winAmount);
+                ShowWinLine(winLine);
 
-                // Animate win line symbols and wait for their ImageAnimation loops to complete
-                yield return StartCoroutine(AnimateWinPositions(winLine.positions));
+                yield return StartCoroutine(AnimateWinPositions(winLine.positions, rounds: winLineRounds));
             }
+        }
+
+        // Back to the total, and hold. rounds: 0 starts everything looping and returns at once, so
+        // this coroutine ends here with the board still animating — the next spin's teardown is what
+        // stops it. Nulling the handle lets PlayWinLineCycle start a fresh sequence if a round ends.
+        KillWinTweens(false);
+        HideAllWinLines();
+        ShowPhase1TotalWin(totalWinAmount);
+
+        yield return StartCoroutine(AnimateWinPositions(allWinPositions, rounds: 0));
+
+        winAnimationCoroutine = null;
+    }
+
+    // The total and the set of winning cells, rebuilt from the lines. Used by PlayWinLineCycle,
+    // which restarts the presentation for a spin whose own run finished long ago.
+    private static void SummariseWinLines(List<WinLine> winLines, out HashSet<int> allWinPositions, out double totalWinAmount)
+    {
+        allWinPositions = new HashSet<int>();
+        totalWinAmount = 0;
+
+        if (winLines == null) return;
+
+        foreach (var winLine in winLines)
+        {
+            totalWinAmount += winLine.winAmount;
+
+            if (winLine.positions == null) continue;
+            foreach (int flatIndex in winLine.positions) allWinPositions.Add(flatIndex);
         }
     }
 
@@ -2185,6 +2243,10 @@ public class SlotView : MonoBehaviour
     /// </summary>
     private void BeginWildStackFadeOut()
     {
+        // Cleared before the early return: pins must never outlive a teardown, even one that finds no
+        // stack to fade, or those cells would be skipped by every presentation that followed.
+        pinnedStackCells.Clear();
+
         if (stretchedStackSlots.Count == 0) return;
 
         // Copied and cleared up front: the tweens below mutate both sets as they complete, and a
@@ -2240,20 +2302,33 @@ public class SlotView : MonoBehaviour
     /// until the player spins again — so firing it there would replay the cue on every pass, for as
     /// long as the player sat looking at the result.
     /// </param>
-    private IEnumerator AnimateWinPositions(IEnumerable<int> flatPositions, bool announceWilds = false)
+    /// <param name="rounds">
+    /// How many times every symbol here plays, IN STEP: they all start together, and the group waits
+    /// for the slowest before going again. Left to their own loop counts they drift apart at once,
+    /// since a symbol's loop length is its frame count over its speed and no two match.
+    /// Zero or less means the closing hold — start them looping and do not wait at all.
+    /// </param>
+    private IEnumerator AnimateWinPositions(IEnumerable<int> flatPositions, int rounds = 1, bool announceWilds = false)
     {
         if (flatPositions == null) yield break;
 
         bool wildAnnounced = false;
 
         int rowLimit = (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.rowCount : 3;
-        int loopCountTarget = (gameManager != null && (gameManager.isInFreeSpins || gameManager.isAutoPlaying)) ? 1 : winSymbolLoopCount;
 
         List<ImageAnimation> activeAnims = new List<ImageAnimation>();
-        int completedCount = 0;
-        bool isCompleted = false;
+
+        // Stacked Wilds are held apart from the group above. They loop continuously for the whole
+        // presentation — both rounds on the total, every win line, and the closing hold — so they
+        // must never be stopped and restarted in step with everything else.
+        List<ImageAnimation> stackAnims = new List<ImageAnimation>();
 
         bool anyShown = false;
+
+        // Stacks that were actually DRAWN this pass, anchor -> height. Pinning reads this rather than
+        // the planned runs, so a run whose anchor slot was skipped can never leave cells pinned with
+        // no stack on them.
+        var drawnStacks = new Dictionary<int, int>();
 
         // Wilds that are stacked one directly above another AND all on a payline play as a single
         // tall animation instead of two or three separate ones. wildRunAnchors maps the BOTTOM cell
@@ -2269,6 +2344,11 @@ public class SlotView : MonoBehaviour
             int col = flatIndex % ReelCount;
 
             if (col < 0 || col >= ReelCount || row < 0 || row >= rowLimit) continue;
+
+            // Under a stack pinned earlier in this presentation. Only Phase 2 can reach this — a
+            // payline crosses one cell per column, so a single line can never form a stack of its
+            // own, and would otherwise redraw this cell as a lone Wild and un-stretch the stack.
+            if (pinnedStackCells.Contains(flatIndex)) continue;
 
             // Image lookup goes to the animation layer, which holds one slot per visible cell.
             if (animSlotColumns == null || col >= animSlotColumns.Count) continue;
@@ -2325,7 +2405,11 @@ public class SlotView : MonoBehaviour
 
             // AFTER ApplySymbol, which stamps the single-symbol size — reversing these would flatten
             // the stack straight back to one cell.
-            if (isStackAnchor) ApplyWildStackLayout(slot, symbolId, stackHeight);
+            if (isStackAnchor)
+            {
+                ApplyWildStackLayout(slot, symbolId, stackHeight);
+                drawnStacks[flatIndex] = stackHeight;
+            }
 
             slotImage.transform.localScale = Vector3.one;
             Color c = slotImage.color;
@@ -2361,22 +2445,28 @@ public class SlotView : MonoBehaviour
             // reads it, so a later change would not take effect until the next start.
             imageAnim.AnimationSpeed = GetSymbolAnimationSpeed(symbolId);
 
-            activeAnims.Add(imageAnim);
-
-            imageAnim.onLoopComplete = (currentLoop) =>
+            if (isStackAnchor)
             {
-                if (currentLoop >= loopCountTarget)
-                {
-                    imageAnim.onLoopComplete = null;
-                    imageAnim.StopAnimation(); // reverts to textureArray[0], which equals the resting sprite
+                imageAnim.doLoopAnimation = true;
+                imageAnim.onLoopComplete = null;
+                stackAnims.Add(imageAnim);
+            }
+            else
+            {
+                activeAnims.Add(imageAnim);
+            }
+        }
 
-                    completedCount++;
-                    if (completedCount >= activeAnims.Count)
-                    {
-                        isCompleted = true;
-                    }
-                }
-            };
+        // Pin every stack this pass drew. Done here — before the wait below — so that by the time
+        // Phase 1 finishes and resets, the stack is already exempt from that reset. The anchor is the
+        // bottom cell; the stack covers the rows directly above it in the same column.
+        foreach (var stack in drawnStacks)
+        {
+            int anchorCell = stack.Key;
+            for (int k = 0; k < stack.Value; k++)
+            {
+                pinnedStackCells.Add(anchorCell - (k * ReelCount));
+            }
         }
 
         // Only raise the dim once something is actually on the layer — otherwise an empty or
@@ -2392,18 +2482,57 @@ public class SlotView : MonoBehaviour
             yield return new WaitForSeconds(winLineBoxToAnimationDelay);
         }
 
-        foreach (var imageAnim in activeAnims)
+        // Stacks run free from here, outside the rounds below.
+        foreach (var stackAnim in stackAnims)
         {
-            imageAnim.StartAnimation();
+            stackAnim.StartAnimation();
         }
 
-        if (activeAnims.Count > 0)
+        // Nothing of our own to animate. Still hold the beat so the sequence keeps its pacing.
+        if (activeAnims.Count == 0)
         {
-            yield return new WaitUntil(() => isCompleted);
+            if (rounds > 0) yield return new WaitForSeconds(winSymbolLoopDuration);
+            yield break;
         }
-        else
+
+        // The closing hold: set everything looping and leave it. Nothing waits on this — the next
+        // spin's teardown is what ends it.
+        if (rounds <= 0)
         {
-            yield return new WaitForSeconds(winSymbolLoopDuration);
+            foreach (var anim in activeAnims)
+            {
+                anim.doLoopAnimation = true;
+                anim.onLoopComplete = null;
+                anim.StartAnimation();
+            }
+
+            yield break;
+        }
+
+        for (int round = 0; round < rounds; round++)
+        {
+            int finished = 0;
+
+            foreach (var anim in activeAnims)
+            {
+                ImageAnimation a = anim;
+
+                // One pass each; the round below is what restarts them, together.
+                a.doLoopAnimation = false;
+                a.onLoopComplete = (loop) =>
+                {
+                    a.onLoopComplete = null;
+
+                    // Reverts to frame 0, so a symbol that finishes early rests on its resting sprite
+                    // instead of freezing on its last frame while it waits for the others.
+                    a.StopAnimation();
+                    finished++;
+                };
+
+                a.StartAnimation();
+            }
+
+            yield return new WaitUntil(() => finished >= activeAnims.Count);
         }
     }
 
@@ -2439,7 +2568,10 @@ public class SlotView : MonoBehaviour
         winTweens.Add(seq);
     }
 
-    private void KillWinTweens(bool stopCoroutine = true)
+    // fadeStacks is false for the two teardowns that end a presentation WITHOUT a new spin — the
+    // skipped-Phase-2 ending and PlayWinLineCycle. A pinned stack has to outlive both; only the
+    // next spin, or a new presentation taking the board over, sends it fading.
+    private void KillWinTweens(bool stopCoroutine = true, bool fadeStacks = true)
     {
         foreach (var tween in winTweens)
         {
@@ -2494,7 +2626,7 @@ public class SlotView : MonoBehaviour
         // Only a full teardown fades the stacked Wilds — the between-cycle reset runs before every
         // Phase 2 line, and fading there would take the stack down on each line change rather than
         // once, when the player actually spins.
-        if (stopCoroutine) BeginWildStackFadeOut();
+        if (stopCoroutine && fadeStacks) BeginWildStackFadeOut();
 
         if (animSlotColumns != null)
         {
@@ -2505,9 +2637,9 @@ public class SlotView : MonoBehaviour
                 {
                     if (slot == null) continue;
 
-                    // A stack still fading is exempt from all of this: killing its tween, forcing
-                    // its alpha back to 1 or stopping its clip would each end the fade on the spot.
-                    if (fadingStackSlots.Contains(slot)) continue;
+                    // A stack that is pinned or still fading is exempt from all of this: killing its
+                    // tween, forcing its alpha back to 1 or stopping its clip would end it on the spot.
+                    if (fadingStackSlots.Contains(slot) || stretchedStackSlots.Contains(slot)) continue;
 
                     if (slot.image != null)
                     {
@@ -2567,11 +2699,10 @@ public class SlotView : MonoBehaviour
                 {
                     if (slot == null || slot.image == null) continue;
 
-                    // Still fading: it is deliberately left on screen, stretched and visible, and
-                    // EndWildStackFade hides and restores it when it finishes.
-                    if (fadingStackSlots.Contains(slot)) continue;
+                    // Pinned or still fading: deliberately left on screen, stretched and looping.
+                    // BeginWildStackFadeOut and EndWildStackFade take it down when the next spin comes.
+                    if (fadingStackSlots.Contains(slot) || stretchedStackSlots.Contains(slot)) continue;
 
-                    stretchedStackSlots.Remove(slot);
                     slot.image.gameObject.SetActive(false);
 
                     // Undo any stacked-Wild re-anchoring. Done for every slot rather than only the
@@ -2595,6 +2726,9 @@ public class SlotView : MonoBehaviour
 
             for (int row = 0; row < reel.displayImages.Count; row++)
             {
+                // Under a pinned stack the reel icon stays hidden, or it ghosts through behind it.
+                if (pinnedStackCells.Contains((row * ReelCount) + col)) continue;
+
                 if (reel.displayImages[row] != null) reel.displayImages[row].gameObject.SetActive(true);
             }
         }
@@ -2603,55 +2737,63 @@ public class SlotView : MonoBehaviour
     // Raises one payline graphic and writes that line's own payout onto it. Indexed straight off
     // the server's lineIndex, so there's no naming convention or lookup table to keep in step with
     // the backend.
-    private void ShowWinLine(int lineId, double winAmount)
+    /// <summary>
+    /// Shows one win line's payout. There is no payline graphic in this game — a line is presented
+    /// by animating its symbols, and this is the only thing drawn on top of them.
+    ///
+    /// The amount sits on the MIDDLE REEL, at whatever row this line occupies there, which is why
+    /// three labels cover all 50 paylines. Read from the win's own positions rather than the payline
+    /// table, so it follows what is actually animating.
+    ///
+    /// Wins that never reach the middle reel — Wild and Warriors both pay on two symbols, which
+    /// covers reels 1 and 2 only — fall back to the middle row.
+    /// </summary>
+    private void ShowWinLine(WinLine winLine)
     {
-        if (winLineVisuals == null) return;
+        if (winLineAmounts == null || winLine == null) return;
 
-        if (lineId < 0 || lineId >= winLineVisuals.Length)
+        int middleReel = ReelCount / 2;
+        int row = RowCount / 2;
+
+        if (winLine.positions != null)
         {
-            Debug.LogWarning($"[SlotView] Win line index {lineId} is outside winLineVisuals ({winLineVisuals.Length} entries) — no line shown.");
+            foreach (int flatIndex in winLine.positions)
+            {
+                if (flatIndex % ReelCount != middleReel) continue;
+
+                row = flatIndex / ReelCount;
+                break;
+            }
+        }
+
+        if (row < 0 || row >= winLineAmounts.Length)
+        {
+            Debug.LogWarning($"[SlotView] Win line row {row} is outside winLineAmounts ({winLineAmounts.Length} entries) — no amount shown.");
             return;
         }
 
-        WinLineVisual visual = winLineVisuals[lineId];
-        if (visual == null)
+        TMPro.TMP_Text label = winLineAmounts[row];
+        if (label == null)
         {
-            Debug.LogWarning($"[SlotView] No entry for win line index {lineId} — no line shown.");
+            Debug.LogWarning($"[SlotView] No win amount label assigned for row {row} — the line will show without its payout.");
             return;
         }
 
-        // The two halves are reported separately: art and label are wired independently, so a
-        // missing one shouldn't suppress the other. Naming the index makes the gap identifiable.
-        if (visual.line != null)
-        {
-            visual.line.gameObject.SetActive(true);
-        }
-        else
-        {
-            Debug.LogWarning($"[SlotView] No graphic assigned for win line index {lineId} — no line shown.");
-        }
-
-        if (visual.amount != null)
-        {
-            visual.amount.text = winAmount.ToString(SpriteTextFormatter.MoneyFormat);
-            visual.amount.gameObject.SetActive(true);
-        }
-        else
-        {
-            Debug.LogWarning($"[SlotView] No amount label assigned for win line index {lineId} — the line will show without its payout.");
-        }
+        // Plain text, not sprite digits — matching the total win. It still shares MoneyFormat, so
+        // the two can never disagree about how an amount is written.
+        label.text = winLine.winAmount.ToString(SpriteTextFormatter.MoneyFormat);
+        label.gameObject.SetActive(true);
     }
 
+    // All three, not just the one showing: the cycle moves between rows, and only the row that is
+    // about to be shown gets switched on again.
     private void HideAllWinLines()
     {
-        if (winLineVisuals == null) return;
-        foreach (var visual in winLineVisuals)
+        if (winLineAmounts == null) return;
+
+        foreach (var label in winLineAmounts)
         {
-            if (visual == null) continue;
-            if (visual.line != null) visual.line.gameObject.SetActive(false);
-            // The label lives under a different parent to the line — it draws in front of the
-            // winning symbols while the line draws behind them — so it needs its own hide.
-            if (visual.amount != null) visual.amount.gameObject.SetActive(false);
+            if (label != null) label.gameObject.SetActive(false);
         }
     }
 
@@ -2661,7 +2803,12 @@ public class SlotView : MonoBehaviour
     // before Phase 1 raised it again, which reads as a flicker.
     private void HideWinDim()
     {
-        if (winAnimationLayer != null) winAnimationLayer.SetActive(false);
+        // The stacked Wilds live on this layer. Switching it off while one is pinned or still
+        // fading would cut it off instantly — which is exactly what used to happen: the fade was
+        // started, then this deactivated the whole layer on the same frame, so it never showed.
+        // Left up, the layer is harmless: every slot and win line on it is hidden individually.
+        bool stackOnScreen = stretchedStackSlots.Count > 0 || fadingStackSlots.Count > 0;
+        if (!stackOnScreen && winAnimationLayer != null) winAnimationLayer.SetActive(false);
 
         // featureDimHeld is the same kind of guard as dimHeld: a feature round owns the dim for its
         // whole duration, so a win teardown inside the round cannot take it down.
@@ -2741,18 +2888,6 @@ public class SlotView : MonoBehaviour
 // One win-animation slot: the Image that shows the symbol and the ImageAnimation that plays it.
 // Both are wired explicitly rather than found with GetComponent — a missing component would
 // otherwise just silently no-op, and these icons must have one while the reel icons must not.
-// One payline: its graphic and its payout label. Paired in a single object for the same reason
-// AnimSlot is — two arrays indexed by lineId could silently drift, and the failure would look
-// exactly like the art-ordering bug that already cost a debugging session (line 5 drawn with
-// line 6's amount). The label is NOT a child of the line: lines draw behind the winning symbols
-// and the amounts in front, so they live under different parents and are shown/hidden separately.
-[System.Serializable]
-public class WinLineVisual
-{
-    public Image line;
-    public TMPro.TMP_Text amount;
-}
-
 // Kept in a single struct so the two can never drift out of step with each other.
 [System.Serializable]
 public class AnimSlot
