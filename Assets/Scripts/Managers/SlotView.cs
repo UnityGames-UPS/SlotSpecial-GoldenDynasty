@@ -152,11 +152,6 @@ public class SlotView : MonoBehaviour
     [SerializeField] private float anticipationUpDistance = 20f;
     [SerializeField] private float anticipationUpDuration = 0.12f;
 
-    [Header("Win Animation Settings")]
-    [SerializeField] private float winPopDuration = 0.4f;
-    [SerializeField] private int winPopRepeat = 3;
-
-
     [Header("Stop Animation Settings")]
     // Ported from PinballDoubleGold's SlotBehaviour.StopReelSpin: one continuous tween using
     // DOTween's built-in overshoot-and-settle curve, instead of two separate tweens manually
@@ -188,9 +183,7 @@ public class SlotView : MonoBehaviour
 
 
     [Header("Win Animation Settings")]
-    [SerializeField] private float winAnimationDuration = 3.0f; // Total duration each win symbol animation plays
     [SerializeField] private float winSymbolLoopDuration = 1.5f;
-    [SerializeField] private int winSymbolLoopCount = 3;
 
     // The shape of the win presentation: the total plays every winning symbol twice in step, then
     // the win lines are walked ONCE with each line playing once, then the total comes back and
@@ -198,7 +191,7 @@ public class SlotView : MonoBehaviour
     private const int totalWinRounds = 2;
     private const int winLinePassCount = 1;
     private const int winLineRounds = 1;
-    [Tooltip("Delay between enabling winBox overlay and starting the ImageAnimation - for sync timing")]
+    [Tooltip("Delay between raising the win animation layer and starting the ImageAnimation - for sync timing")]
     [SerializeField] private float winLineBoxToAnimationDelay = 0.05f;
 
     [Header("Win Presentation Layer")]
@@ -1252,9 +1245,8 @@ public class SlotView : MonoBehaviour
         seq.AppendCallback(() => imageAnim.StartAnimation());
 
         // loopCount <= 0 means run indefinitely — skip scheduling the stop entirely and let
-        // whatever kills winTweens end it. The only live caller (AnimateAllScatters, via the
-        // free-games trigger) passes 0, so the timed branch below is currently unexercised; it
-        // stays for the method's default of 1 and for any future caller that wants a bounded run.
+        // whatever kills winTweens end it. The free-games trigger passes 0 so the scatters keep
+        // playing behind the award prompt; the retrigger passes scatterTriggerLoops for a bounded run.
         if (loopCount > 0)
         {
             seq.AppendInterval(winSymbolLoopDuration * loopCount);
@@ -1814,21 +1806,6 @@ public class SlotView : MonoBehaviour
     }
 
     /// <summary>
-    /// Switches ONE Orb's animation between its base-game and Hold &amp; Spin variants, leaving the
-    /// sprite and the prize alone. Used by the payout walk to revert each Orb as its dragon lifts
-    /// off, which is also the only feedback that an Orb has been collected.
-    ///
-    /// Restarts the clip from frame 0 — swapping the frame list requires it.
-    /// </summary>
-    internal void SetOrbAnimation(int flatIndex, bool feature)
-    {
-        OrbSlot slot = ResolveOrbSlot(flatIndex);
-        if (slot?.image == null || !slot.image.gameObject.activeSelf) return;
-
-        PlayOrbAnimation(slot, feature);
-    }
-
-    /// <summary>
     /// Switches every Orb currently on the layer, and sets which variant Orbs written from now on
     /// get — so an Orb landing mid-round comes up already wearing the feature animation.
     ///
@@ -2178,9 +2155,7 @@ public class SlotView : MonoBehaviour
         anchors = new Dictionary<int, int>();
         covered = new HashSet<int>();
 
-        int wildId = (gameManager != null && gameManager.gameConfig != null)
-            ? gameManager.gameConfig.wildSymbolId
-            : -1;
+        int wildId = WildSymbolId;
 
         if (wildId < 0 || flatPositions == null || currentDisplayMatrix == null) return;
 

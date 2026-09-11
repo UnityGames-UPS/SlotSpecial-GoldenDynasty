@@ -102,14 +102,12 @@ public class UIManager : MonoBehaviour
 
     [Header("Settings Panel")]
     [SerializeField] private GameObject settingsPanel;
-    [SerializeField] private RectTransform settingsPanelRect;
     [SerializeField] private Button settingsOpenButton;
     [SerializeField] private Button settingsCloseButton;
     [SerializeField] private Button settingsBgCloseButton;
     [SerializeField] private Button gameQuitButton;
     [Header("Settings Panel - Portrait")]
     [SerializeField] private GameObject settingsPanelPortrait;
-    [SerializeField] private RectTransform settingsPanelRectPortrait;
     [SerializeField] private Button settingsOpenButtonPortrait;
     [SerializeField] private Button settingsCloseButtonPortrait;
     [SerializeField] private Button settingsBgCloseButtonPortrait;
@@ -146,7 +144,6 @@ public class UIManager : MonoBehaviour
 
     [Header("Game Rules Panel")]
     [SerializeField] private GameObject gameRulesPanel;
-    [SerializeField] private RectTransform gameRulesPanelRect;
     [SerializeField] private Button gameRulesOpenButton;
     [SerializeField] private Button gameRulesBackButton;
     [Header("Game Rules Panel - Portrait")]
@@ -154,7 +151,6 @@ public class UIManager : MonoBehaviour
 
     [Header("Guide Panel")]
     [SerializeField] private GameObject guidePanel;
-    [SerializeField] private RectTransform guidePanelRect;
     [SerializeField] private Button guideOpenButton;
     [SerializeField] private Button guideBackButton;
     [Header("Guide Panel - Portrait")]
@@ -184,9 +180,6 @@ public class UIManager : MonoBehaviour
 
     private bool isExpanded = false;
     private bool isSettingsPanelOpen = false;
-
-    private Tween balanceTween;
-    private Tween winTween;
 
     [Header("Rapid Stop Cooldown")]
     [Tooltip("Seconds the player must wait before pressing Stop again after an immediate stop.")]
@@ -1385,8 +1378,6 @@ public class UIManager : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (balanceTween != null) balanceTween.Kill();
-        if (winTween != null) winTween.Kill();
         DOTween.KillAll();
     }
 

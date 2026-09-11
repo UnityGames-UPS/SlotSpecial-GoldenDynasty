@@ -30563,13 +30563,11 @@ MonoBehaviour:
   autoPlay500ButtonPortrait: {fileID: 470772721}
   autoPlayInfiniteButtonPortrait: {fileID: 2034581048}
   settingsPanel: {fileID: 0}
-  settingsPanelRect: {fileID: 0}
   settingsOpenButton: {fileID: 0}
   settingsCloseButton: {fileID: 0}
   settingsBgCloseButton: {fileID: 0}
   gameQuitButton: {fileID: 0}
   settingsPanelPortrait: {fileID: 1109363044}
-  settingsPanelRectPortrait: {fileID: 1281428937}
   settingsOpenButtonPortrait: {fileID: 754528592}
   settingsCloseButtonPortrait: {fileID: 399166446}
   settingsBgCloseButtonPortrait: {fileID: 1109363048}
@@ -30599,12 +30597,10 @@ MonoBehaviour:
   soundPanelOpenButton: {fileID: 0}
   soundPanelOpenButtonPortrait: {fileID: 1591346511}
   gameRulesPanel: {fileID: 2115638691}
-  gameRulesPanelRect: {fileID: 1439971687}
   gameRulesOpenButton: {fileID: 0}
   gameRulesBackButton: {fileID: 688696303}
   gameRulesOpenButtonPortrait: {fileID: 776911395}
   guidePanel: {fileID: 627276382}
-  guidePanelRect: {fileID: 241912261}
   guideOpenButton: {fileID: 0}
   guideBackButton: {fileID: 2111848017}
   guideOpenButtonPortrait: {fileID: 593848524}
@@ -30690,7 +30686,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 90d2166871990724cb25d6ea69ea9f8f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FreeGameView
-  uiManager: {fileID: 885496184}
   freeGamesTexts: {fileID: 1956865636}
   freeGamesTextsGroup: {fileID: 1956865640}
   pressStartFeature: {fileID: 872030046}
@@ -42643,7 +42638,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f521a04de7f494272a617b2719edd271, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SocketIOManager
-  testToken: 3497686ac33a45c08b26453d27238716
+  testToken: 0e1865d40be04a8ea1918a0181c4bb76
   gameManager: {fileID: 1206269883}
   uiManager: {fileID: 885496184}
   popupManager: {fileID: 1363796882}
@@ -52890,8 +52885,6 @@ MonoBehaviour:
   reelStopStagger: 0.15
   anticipationUpDistance: 30
   anticipationUpDuration: 0.12
-  winPopDuration: 0.4
-  winPopRepeat: 3
   stopEase: 27
   stopEaseOvershoot: 0.9
   stopDuration: 0.5
@@ -52907,9 +52900,7 @@ MonoBehaviour:
   anticipationExtraTimeTurbo: 0.8
   bufferRowsAbove: 16
   spinLoopEase: 1
-  winAnimationDuration: 3
   winSymbolLoopDuration: 1.5
-  winSymbolLoopCount: 3
   winLineBoxToAnimationDelay: 0.05
   winDimOverlay: {fileID: 564333208}
   winAnimationLayer: {fileID: 1151225649}
@@ -53628,7 +53619,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: 0, y: 531}
-  m_SizeDelta: {x: 1428, y: 406}
+  m_SizeDelta: {x: 2172, y: 409.1}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1514430263
 MonoBehaviour:
@@ -53666,6 +53657,22 @@ MonoBehaviour:
   - {fileID: 21300000, guid: f8e978322e2b5444c90292febfdf01d5, type: 3}
   - {fileID: 21300000, guid: 86882c6a9276e484c855a54c58850ab5, type: 3}
   - {fileID: 21300000, guid: 54b087ca63dc2bb40a689cd6c989a64b, type: 3}
+  - {fileID: 21300000, guid: 355e99d36e5527a4393285a7e2f2c0c9, type: 3}
+  - {fileID: 21300000, guid: e988c27eef1628b46810eb180f285047, type: 3}
+  - {fileID: 21300000, guid: 9a234576beeb6db41bab3a6b5e26e786, type: 3}
+  - {fileID: 21300000, guid: 8216f6436941b3f4f84aa618472e87a5, type: 3}
+  - {fileID: 21300000, guid: 73290a3db0c946742a08cbffc0fa2fac, type: 3}
+  - {fileID: 21300000, guid: 55f805f9927e92f44b78a99ef1680a8d, type: 3}
+  - {fileID: 21300000, guid: e062704d57b659a468a393aa931ba53b, type: 3}
+  - {fileID: 21300000, guid: a8f1e71ce82b6c948a8270d5a1472a02, type: 3}
+  - {fileID: 21300000, guid: 2135d736e85c7df4c88d94bb083b4d63, type: 3}
+  - {fileID: 21300000, guid: fd559e05f03e9c249aa430a0a2a3c347, type: 3}
+  - {fileID: 21300000, guid: f51cb453a04424649b4a5dfb9744b4c1, type: 3}
+  - {fileID: 21300000, guid: 6b20ba7c06f0a5341ad92328deab1920, type: 3}
+  - {fileID: 21300000, guid: 471b0a4f14ddf9d4d9b5d1d964f6f0d6, type: 3}
+  - {fileID: 21300000, guid: c9a550cb15b2a7e469baa5db3c98c774, type: 3}
+  - {fileID: 21300000, guid: b231af389be4473428c5128deaa783b1, type: 3}
+  - {fileID: 21300000, guid: b6fdb6a22cbeff24481eacb29a6f0de9, type: 3}
   rendererDelegate: {fileID: 1514430264}
   useSharedMaterial: 1
   doLoopAnimation: 1
@@ -54998,7 +55005,6 @@ MonoBehaviour:
   endOffset: {x: -1.2, y: -1.2}
   bendVariance: 0.6
   controlCeiling: 0.9
-  logFlightDiagnostics: 1
 --- !u!1 &1545642120
 GameObject:
   m_ObjectHideFlags: 0
@@ -64712,7 +64718,7 @@ MonoBehaviour:
   StartOnAwake: 0
   StartonEnable: 0
   currentAnimationState: 0
-  AnimationSpeed: 5
+  AnimationSpeed: 15
   delayBetweenLoop: 0
 --- !u!114 &1880076665
 MonoBehaviour:

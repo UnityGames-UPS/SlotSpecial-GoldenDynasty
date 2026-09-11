@@ -18,9 +18,6 @@ using DG.Tweening;
 /// </summary>
 public class FreeGameView : MonoBehaviour
 {
-    [Header("References")]
-    [SerializeField] private UIManager uiManager;
-
     [Header("Counter Panel")]
     [Tooltip("The FreeGamesTexts panel. Holds all three states below and fades out as one at the " +
              "end of the round.")]

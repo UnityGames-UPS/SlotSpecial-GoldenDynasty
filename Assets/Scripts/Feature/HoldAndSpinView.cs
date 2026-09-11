@@ -774,13 +774,6 @@ public class HoldAndSpinView : MonoBehaviour
             Vector3 start = orbRect.position;
             Vector3 end = targetRect.position;
 
-            // TEMPORARY, names the flyer's one-line flight summary so a whole round reads as one
-            // line per Orb. Row and column are derived the same way ResolveOrbSlot does it.
-            dragon.DiagnosticLabel = string.Format("orb {0,2} (r{1},c{2})",
-                                                   flatIndex,
-                                                   flatIndex / slotView.ReelCount,
-                                                   flatIndex % slotView.ReelCount);
-
             bool arrived = false;
             bool ready = false;
 

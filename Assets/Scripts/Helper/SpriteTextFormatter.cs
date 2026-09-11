@@ -5,8 +5,7 @@ public static class SpriteTextFormatter
     // Single definition of how money is written across the game. "0.00" rather than "0.###"
     // because # drops trailing zeros — a win of 1 rendered as a bare "1" and 0.5 as "0.5",
     // so the decimals appeared and vanished depending on the amount.
-    // Deliberately NOT used for the free-games multiplier ("X5" reads better than "X5.00")
-    // or the paytable in SymbolInfoCard, which both stay compact.
+    // Deliberately NOT used for the paytable in SymbolInfoCard, which stays compact.
     public const string MoneyFormat = "0.00";
 
     // Money formatted for the sprite-digit fonts. Plain-text money displays should use
