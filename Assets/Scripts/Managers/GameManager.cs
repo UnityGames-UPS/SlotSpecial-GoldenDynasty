@@ -384,7 +384,19 @@ public class GameManager : MonoBehaviour
         {
             uiManager.OnSpinStopping(lastResult);
             currentState = GameState.Idle;
-            OnWinAnimationComplete();
+
+            // Still handed to the view, just with nothing to present. A spin with no lines can
+            // leave presentation state behind — a Mystery reveal holds the dim up for a win that
+            // is now never coming — and what to do about that is SlotView's call, not this one's.
+            // Skipping the view here is what left the board dimmed after a no-win Mystery spin.
+            if (slotView != null)
+            {
+                slotView.ShowWinLineAnimation(null, OnWinAnimationComplete);
+            }
+            else
+            {
+                OnWinAnimationComplete();
+            }
         }
     }
 

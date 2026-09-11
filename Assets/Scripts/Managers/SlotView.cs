@@ -251,9 +251,16 @@ public class SlotView : MonoBehaviour
     private List<Tween> winTweens = new List<Tween>();
     private Coroutine winAnimationCoroutine;
 
+    // The controller asked for the line walk (PlayWinLineCycle) while a presentation was still on
+    // its total. That presentation decided at its start whether to walk the lines, so without this
+    // the request was simply dropped — stopping autoplay part-way through the total left the spin
+    // with no walk and no hold at all. Reset at the start of every presentation.
+    private bool lineWalkRequested;
+
     // The lines from the spin that just landed, kept so the controller can start the Phase 2 cycle
     // after the fact — autoplay and free spins skip it while they run, and only the controller knows
-    // when the round is actually over.
+    // when the round is actually over. Null on a losing spin: StartSpin clears it, and only a win
+    // writes it again.
     private List<WinLine> lastWinLines;
 
     // Which reels are being held back to tease a scatter trigger this spin. Filled before the reels
@@ -759,6 +766,15 @@ public class SlotView : MonoBehaviour
         if (symbolInfoCard != null) symbolInfoCard.HideCard();
 
         isSpinning = true;
+
+        // The previous spin's lines stop being "the lines from the spin that just landed" the
+        // moment a new one starts. Only a WINNING spin writes this field — a losing one never
+        // reaches ShowWinLineAnimation — so without this it held the last win of the session, and
+        // PlayWinLineCycle replayed that old win, amounts and all, over whatever board was now
+        // showing: at the end of autoplay or Free Games after a losing spin, or over the spinning
+        // reels when autoplay was stopped mid-spin. Cleared, a losing spin leaves nothing to replay.
+        lastWinLines = null;
+
         KillAllTweens();
 
         DisableAllOverlays();
@@ -1931,14 +1947,23 @@ public class SlotView : MonoBehaviour
     /// skip Phase 2 while they're running — a round ends with the presentation parked after Phase 1
     /// — so the controller calls this once the round is genuinely over. Loops until the next
     /// StartSpin kills it, same as an ordinary manual spin.
+    ///
+    /// If that spin's presentation is still running, the request is left for it rather than acted on
+    /// here: it walks the lines itself once its total ends.
     /// </summary>
     internal void PlayWinLineCycle()
     {
         if (lastWinLines == null || lastWinLines.Count == 0) return;
 
-        // The player can stop autoplay mid-presentation, in which case Phase 2 was never skipped and
-        // is already running. Restarting would double up the coroutine and strobe the lines.
-        if (winAnimationCoroutine != null) return;
+        // Still presenting — the player stopped autoplay while the total was on screen. Starting a
+        // second coroutine would double up and strobe the lines, and simply returning would drop the
+        // request, because that presentation decided before its total to skip the walk. So it is
+        // recorded instead, and PlayTwoPhaseWinLines honours it when the total ends.
+        if (winAnimationCoroutine != null)
+        {
+            lineWalkRequested = true;
+            return;
+        }
 
         // fadeStacks: false — this restarts the cycle for the SAME spin (the end of a Free Games
         // round, or autoplay stopping), so its pinned stack stays up and keeps looping under it.
@@ -1950,6 +1975,9 @@ public class SlotView : MonoBehaviour
 
     private IEnumerator PlayTwoPhaseWinLines(List<WinLine> winLines, System.Action onComplete)
     {
+        // A request left for a previous presentation must not carry into this one.
+        lineWalkRequested = false;
+
         int rowLimit = (gameManager != null && gameManager.gameConfig != null) ? gameManager.gameConfig.rowCount : 3;
 
         // Was a feature triggered on this spin? Computed up here rather than between the phases,
@@ -2023,9 +2051,9 @@ public class SlotView : MonoBehaviour
             totalWinAmount = gameManager.lastResult.winAmount;
         }
 
-        // Decided BEFORE the total plays, not after, because it now picks the round count too.
-        // Reading it later also made it a race: onComplete below can end a Free Games round, which
-        // clears isInFreeSpins, so the check could come out false on the very spin it was meant for.
+        // Decided BEFORE the total plays, because it picks the total's round count. It also skips the
+        // line walk afterwards — unless the controller asks for the walk while the total is still
+        // playing, which is checked once the total ends (see lineWalkRequested).
         //
         // Trigger spins never reach here — they returned above.
         bool skipPhase2 = gameManager != null
@@ -2048,7 +2076,10 @@ public class SlotView : MonoBehaviour
         // complete) can proceed while the win lines are still being walked.
         onComplete?.Invoke();
 
-        if (skipPhase2)
+        // The round count above had to be fixed before the total played; the walk did not. If
+        // autoplay was stopped while the total was on screen, the controller has asked for the walk
+        // by now, and this spin gets it the same way a manual spin would.
+        if (skipPhase2 && !lineWalkRequested)
         {
             // Take the presentation down on the way out. Mid-round this is invisible — the next
             // spin's KillAllTweens would have cleared it — but on the last autoplay spin, and at the
