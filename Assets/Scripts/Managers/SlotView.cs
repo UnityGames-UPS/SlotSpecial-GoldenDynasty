@@ -946,9 +946,9 @@ public class SlotView : MonoBehaviour
         isSpinning = false;
 
         // Cut the spin loop here rather than in the controller's OnReelsStoppedComplete: this is the
-        // real moment the last reel lands, and on a quick stop the controller waits another 0.5s for
-        // the snap to settle before it runs. Anticipation is already accounted for, since the hold is
-        // folded into longestStopTime above — a teased reel keeps the loop running while it spins on.
+        // real moment the last reel lands, on both the normal and the quick stop. Anticipation is
+        // already accounted for, since the hold is folded into longestStopTime above — a teased
+        // reel keeps the loop running while it spins on.
         AudioManager.Instance?.StopSpinLoop();
 
         onComplete?.Invoke();

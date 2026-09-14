@@ -42638,7 +42638,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f521a04de7f494272a617b2719edd271, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SocketIOManager
-  testToken: 0e1865d40be04a8ea1918a0181c4bb76
+  testToken: 93ddae98c42b437eabc5256c08e0eec1
   gameManager: {fileID: 1206269883}
   uiManager: {fileID: 885496184}
   popupManager: {fileID: 1363796882}
@@ -45889,7 +45889,7 @@ MonoBehaviour:
   clipBetPlusMinus: {fileID: 8300000, guid: 619303bc65965c74ca58fe18f74d34b4, type: 3}
   clipMaxBetReached: {fileID: 8300000, guid: 6ea9c083bebf22049a1e9e4b117e8989, type: 3}
   clipScatterTrigger: {fileID: 8300000, guid: c723942d1ad323a47bcec0b76ba8ede7, type: 3}
-  clipBigWin: {fileID: 8300000, guid: 14932a00fea3a1a469e3b0107e7bcde1, type: 3}
+  clipBigWin: {fileID: 8300000, guid: b3dfafb7fe7b78b448d6994439b89968, type: 3}
   clipSpinStart: {fileID: 8300000, guid: 252d823611b34ba41b1c96e2e950257e, type: 3}
   clipPrimaryActionButton: {fileID: 8300000, guid: cdc28904abf8f482a86f75b5b1087cd1, type: 3}
   clipGeneralButtonClick: {fileID: 8300000, guid: f708894f01ee84c49a23d2d53243e98e, type: 3}

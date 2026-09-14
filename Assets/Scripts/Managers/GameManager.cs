@@ -307,13 +307,13 @@ public class GameManager : MonoBehaviour
         {
             if (currentSpinSpeed == SpinSpeed.QuickSpin || stopRequested)
             {
-                slotView.QuickStop(lastResult.resultMatrix);
-
-                // Wait for the snap animation to settle before processing result
-                float quickStopWaitTime = 0.5f;
-                yield return new WaitForSeconds(quickStopWaitTime);
-
-                OnReelsStoppedComplete();
+                // The view reports when the snap has settled, exactly as the normal stop does. This
+                // used to wait a fixed 0.5s instead — a guess that only held because the reels
+                // happen to land in 0.44s. Raise quickStopStagger or quickStopDuration in the
+                // Inspector and the result was presented over a reel still landing, and the next
+                // spin could start while SlotView still thought it was spinning, so its reels never
+                // moved.
+                slotView.QuickStop(lastResult.resultMatrix, OnReelsStoppedComplete);
             }
             else
             {
@@ -358,6 +358,17 @@ public class GameManager : MonoBehaviour
     // Everything that happens once the board is final — after the Mystery reveal, if there was one.
     private void PresentSpinOutcome()
     {
+        // A spin that awards Free Games is not over once its outcome is presented: the Scatters
+        // still celebrate for scatterTriggerHold, and only then does ProcessSpinResult enter the
+        // round. Returning to Idle here left that whole hold open to a Spin press, which entered
+        // the round early and started a free spin with no prompt — and when the hold ended,
+        // ProcessSpinResult consumed THAT spin's result, leaving its reels spinning forever.
+        //
+        // So the controller stays out of Idle until the round is entered. Every spin, bet and
+        // autoplay entry point already refuses anything but Idle; StartFreeSpins — or
+        // StartHoldAndSpin on a spin that triggers both — is what puts it back.
+        GameState settledState = IsFreeGamesTrigger(lastResult) ? GameState.ShowingWin : GameState.Idle;
+
         if (lastResult != null && lastResult.winAmount > 0 && lastResult.winLines != null && lastResult.winLines.Count > 0)
         {
             double totalPay = GetTotalPay();
@@ -366,7 +377,7 @@ public class GameManager : MonoBehaviour
             if (multiplier >= bigWinMultiplierThreshold)
             {
                 uiManager.DisableControlsDuringWinAnimation();
-                currentState = GameState.Idle;
+                currentState = settledState;
                 slotView.ShowWinLineAnimation(lastResult.winLines, OnWinAnimationComplete);
                 StartCoroutine(TriggerWinPopupWithDelay(1.5f, lastResult));
             }
@@ -376,14 +387,14 @@ public class GameManager : MonoBehaviour
                 uiManager.OnSpinStopping(lastResult);
                 uiManager.EnableControlsAfterWinAnimation();
                 uiManager.OnSpinCompleted(lastResult);
-                currentState = GameState.Idle;
+                currentState = settledState;
                 slotView.ShowWinLineAnimation(lastResult.winLines, OnWinAnimationComplete);
             }
         }
         else
         {
             uiManager.OnSpinStopping(lastResult);
-            currentState = GameState.Idle;
+            currentState = settledState;
 
             // Still handed to the view, just with nothing to present. A spin with no lines can
             // leave presentation state behind — a Mystery reveal holds the dim up for a win that
@@ -503,6 +514,12 @@ public class GameManager : MonoBehaviour
 
     private IEnumerator DelayScatterTriggerResult()
     {
+        // Nothing is pressable during the hold — PresentSpinOutcome kept the controller out of
+        // Idle for it — so the button should not look pressable either. A trigger that paid a line
+        // has just had its controls re-enabled by the win path. ProcessSpinResult below brings them
+        // back, and StartFreeSpins then puts Start up in the same frame.
+        uiManager.DisableControlsDuringWinAnimation();
+
         // Play special feature trigger sound AFTER all reels have stopped
         AudioManager.Instance?.PlayScatterTrigger();
 
@@ -533,11 +550,17 @@ public class GameManager : MonoBehaviour
     private float GetSpinDuration()
     {
         // A Hold & Spin respin is its own thing: often only one or two cells are moving, and the
-        // round is many spins long, so the base game's 3.5s would make it a slog. Turbo still
-        // shortens it — the feature honours turbo like any other spin.
+        // round is many spins long, so the base game's duration would make it a slog. Turbo still
+        // shortens it — the feature honours turbo like any other spin. Quick Spin counts as Turbo
+        // here, since the cells have no quick-stop path.
+        //
+        // Shortened by the same PROPORTION turbo shortens a base spin, not replaced by the base
+        // game's turbo duration. That used to be returned as-is, and it is longer than
+        // holdSpinDuration — so Turbo and Quick Spin made every respin slower than Normal.
         if (isInHoldAndSpin)
         {
-            return currentSpinSpeed == SpinSpeed.Normal ? holdSpinDuration : turboSpinDuration;
+            if (currentSpinSpeed == SpinSpeed.Normal || normalSpinDuration <= 0f) return holdSpinDuration;
+            return holdSpinDuration * (turboSpinDuration / normalSpinDuration);
         }
 
         return currentSpinSpeed switch
@@ -607,6 +630,18 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    // A trigger is a spin that awarded spins while not itself being a free spin — the awarding
+    // spin is an ordinary paid base spin. A retrigger has spinsAwarded set too, but with
+    // isFreeGame true, and needs nothing: the extra spins are already in spinsRemaining.
+    //
+    // One test for both places that care — PresentSpinOutcome holding the controller out of Idle
+    // and ProcessSpinResult entering the round — so the hold can never outlast the entry.
+    private bool IsFreeGamesTrigger(SpinResult result)
+    {
+        return !isInFreeSpins && result != null && result.freeGame != null
+            && result.freeGame.spinsAwarded && !result.freeGame.isFreeGame;
+    }
+
     private void ProcessSpinResult()
     {
         playerData = lastResult.playerData;
@@ -642,13 +677,9 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        // A trigger is a spin that awarded spins while not itself being a free spin — the awarding
-        // spin is an ordinary paid base spin. A retrigger has spinsAwarded set too, but with
-        // isFreeGame true, and needs nothing here: the extra spins are already in spinsRemaining.
-        FreeGameData freeGame = lastResult.freeGame;
-        if (!isInFreeSpins && freeGame != null && freeGame.spinsAwarded && !freeGame.isFreeGame)
+        if (IsFreeGamesTrigger(lastResult))
         {
-            StartFreeSpins(freeGame.spinsRemaining);
+            StartFreeSpins(lastResult.freeGame.spinsRemaining);
             lastResult = null;
             return;
         }
@@ -757,8 +788,13 @@ public class GameManager : MonoBehaviour
         //
         // Both feature rounds are excluded. StartHoldAndSpin calls this to park autoplay before the
         // round begins, and the triggering spin may well have paid a line — cycling those lines here
-        // would run them underneath the feature intro for the next twenty seconds.
-        if (!isInFreeSpins && !isInHoldAndSpin && slotView != null) slotView.PlayWinLineCycle();
+        // would run them underneath the feature intro for the next twenty seconds. The same goes
+        // for a Free Games trigger still holding for its Scatters (ShowingWin): the cycle would
+        // tear the Scatter celebration down and then loop under the Start prompt.
+        if (!isInFreeSpins && !isInHoldAndSpin && currentState != GameState.ShowingWin && slotView != null)
+        {
+            slotView.PlayWinLineCycle();
+        }
     }
 
     internal bool ShouldResumeAutoPlay()
