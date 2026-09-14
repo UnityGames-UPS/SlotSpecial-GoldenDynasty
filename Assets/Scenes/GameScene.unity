@@ -46287,7 +46287,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 0.05
+  m_text: <sprite=0>
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 29a3c5066caa77d4f8eb58111935b6f3, type: 2}
   m_sharedMaterial: {fileID: 3005885927822680402, guid: 29a3c5066caa77d4f8eb58111935b6f3, type: 2}
@@ -46306,7 +46306,7 @@ MonoBehaviour:
     bottomLeft: {r: 1, g: 1, b: 1, a: 1}
     bottomRight: {r: 1, g: 1, b: 1, a: 1}
   m_fontColorGradientPreset: {fileID: 0}
-  m_spriteAsset: {fileID: 11400000, guid: 6e58a7b26ef54894a8682c560e2d4158, type: 2}
+  m_spriteAsset: {fileID: 11400000, guid: c95f50c5b68a3482eac5c36e0be4b243, type: 2}
   m_tintAllSprites: 0
   m_StyleSheet: {fileID: 0}
   m_TextStyleHashCode: -1183493901
@@ -55809,7 +55809,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 0.05
+  m_text: <sprite=0>
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 29a3c5066caa77d4f8eb58111935b6f3, type: 2}
   m_sharedMaterial: {fileID: 3005885927822680402, guid: 29a3c5066caa77d4f8eb58111935b6f3, type: 2}
@@ -55828,7 +55828,7 @@ MonoBehaviour:
     bottomLeft: {r: 1, g: 1, b: 1, a: 1}
     bottomRight: {r: 1, g: 1, b: 1, a: 1}
   m_fontColorGradientPreset: {fileID: 0}
-  m_spriteAsset: {fileID: 11400000, guid: 6e58a7b26ef54894a8682c560e2d4158, type: 2}
+  m_spriteAsset: {fileID: 11400000, guid: c95f50c5b68a3482eac5c36e0be4b243, type: 2}
   m_tintAllSprites: 0
   m_StyleSheet: {fileID: 0}
   m_TextStyleHashCode: -1183493901
@@ -67565,7 +67565,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 0.05
+  m_text: <sprite=0>
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 29a3c5066caa77d4f8eb58111935b6f3, type: 2}
   m_sharedMaterial: {fileID: 3005885927822680402, guid: 29a3c5066caa77d4f8eb58111935b6f3, type: 2}
@@ -67584,7 +67584,7 @@ MonoBehaviour:
     bottomLeft: {r: 1, g: 1, b: 1, a: 1}
     bottomRight: {r: 1, g: 1, b: 1, a: 1}
   m_fontColorGradientPreset: {fileID: 0}
-  m_spriteAsset: {fileID: 11400000, guid: 6e58a7b26ef54894a8682c560e2d4158, type: 2}
+  m_spriteAsset: {fileID: 11400000, guid: c95f50c5b68a3482eac5c36e0be4b243, type: 2}
   m_tintAllSprites: 0
   m_StyleSheet: {fileID: 0}
   m_TextStyleHashCode: -1183493901
@@ -70904,7 +70904,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 0.2
+  m_text: <sprite=0>
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 29a3c5066caa77d4f8eb58111935b6f3, type: 2}
   m_sharedMaterial: {fileID: 3005885927822680402, guid: 29a3c5066caa77d4f8eb58111935b6f3, type: 2}
@@ -70923,7 +70923,7 @@ MonoBehaviour:
     bottomLeft: {r: 1, g: 1, b: 1, a: 1}
     bottomRight: {r: 1, g: 1, b: 1, a: 1}
   m_fontColorGradientPreset: {fileID: 0}
-  m_spriteAsset: {fileID: 11400000, guid: 6e58a7b26ef54894a8682c560e2d4158, type: 2}
+  m_spriteAsset: {fileID: 11400000, guid: c95f50c5b68a3482eac5c36e0be4b243, type: 2}
   m_tintAllSprites: 0
   m_StyleSheet: {fileID: 0}
   m_TextStyleHashCode: -1183493901

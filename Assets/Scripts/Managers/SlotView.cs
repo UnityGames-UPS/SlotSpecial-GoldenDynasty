@@ -2590,7 +2590,9 @@ public class SlotView : MonoBehaviour
     {
         if (phase1TotalWinText != null)
         {
-            phase1TotalWinText.text = totalWinAmount.ToString(SpriteTextFormatter.MoneyFormat);
+            // Sprite digits, drawn from the text's sprite asset — the same one the per-line amounts
+            // use, so the total and the lines always match each other.
+            phase1TotalWinText.text = SpriteTextFormatter.ToSpriteMoney(totalWinAmount);
             AnimateTextScaleAppear(phase1TotalWinText.transform);
         }
     }
@@ -2829,9 +2831,9 @@ public class SlotView : MonoBehaviour
             return;
         }
 
-        // Plain text, not sprite digits — matching the total win. It still shares MoneyFormat, so
-        // the two can never disagree about how an amount is written.
-        label.text = winLine.winAmount.ToString(SpriteTextFormatter.MoneyFormat);
+        // Sprite digits, matching the total win. ToSpriteMoney goes through MoneyFormat, so the two
+        // can never disagree about how an amount is written.
+        label.text = SpriteTextFormatter.ToSpriteMoney(winLine.winAmount);
         label.gameObject.SetActive(true);
     }
 
