@@ -38,6 +38,30 @@ public class JackpotSyncData
     public JackpotValues values;
 }
 
+// The four platform jackpot tiers, in the order the platform ranks them.
+public enum JackpotTier
+{
+    Grand,
+    Major,
+    Minor,
+    Mini
+}
+
+// Clicking a jackpot tier asks the platform to open its own jackpot overlay. Fire-and-forget —
+// the server sends no direct reply; any resulting value change arrives on the usual jackpot:sync.
+[Serializable]
+public class JackpotOpenRequest
+{
+    public string type = "JACKPOT_OPEN";
+    public JackpotOpenPayload payload = new JackpotOpenPayload();
+}
+
+[Serializable]
+public class JackpotOpenPayload
+{
+    public string tier;
+}
+
 [Serializable]
 public class ServerGameData
 {

@@ -611,6 +611,65 @@ public class SocketIOManager : MonoBehaviour
 
     #endregion
 
+    #region Jackpot Open Request
+
+    // Debounce shared by all four tiers, not one per tier: only one platform overlay can be open,
+    // so a click on any tier locks the rest out until ResetJackpotOpen fires.
+    private bool JackpotOpen;
+
+    /// <summary>
+    /// Asks the platform to open its jackpot overlay for one tier. Fire-and-forget: the server
+    /// sends no direct reply, and any resulting value change arrives on jackpot:sync as usual.
+    /// </summary>
+    internal void SendJackpotOpen(JackpotTier tier)
+    {
+        if (JackpotOpen) return;
+
+        JackpotOpen = true;
+
+        var request = new JackpotOpenRequest
+        {
+            type = "JACKPOT_OPEN",
+            payload = new JackpotOpenPayload
+            {
+                tier = ToTierString(tier)
+            }
+        };
+
+        string json = JsonConvert.SerializeObject(request);
+        Debug.Log($"[SocketIO] Jackpot Open request: {json}");
+
+        if (gameSocket != null)
+        {
+            gameSocket.Emit("request", json);
+        }
+
+        Invoke(nameof(ResetJackpotOpen), 1f);
+    }
+
+    private void ResetJackpotOpen()
+    {
+        JackpotOpen = false;
+    }
+
+    // Explicit rather than tier.ToString().ToLower(), so renaming an enum member can never silently
+    // change what goes on the wire.
+    private static string ToTierString(JackpotTier tier)
+    {
+        switch (tier)
+        {
+            case JackpotTier.Grand: return "grand";
+            case JackpotTier.Major: return "major";
+            case JackpotTier.Minor: return "minor";
+            case JackpotTier.Mini:  return "mini";
+            default:
+                Debug.LogWarning($"[SocketIO] Unmapped jackpot tier '{tier}' — sending lowercased name.");
+                return tier.ToString().ToLowerInvariant();
+        }
+    }
+
+    #endregion
+
 
 
     #region Cleanup
