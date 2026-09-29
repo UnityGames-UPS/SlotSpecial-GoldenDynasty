@@ -7050,10 +7050,5 @@
             The old index where the change occurred (for Move events).
             </summary>
         </member>
-        <member name="T:UnitySourceGeneratedAssemblyMonoScriptTypes_v1.MonoScriptData">
-            <summary>
-            Data is UTF-8 encoded strings
-            </summary>
-        </member>
     </members>
 </doc>

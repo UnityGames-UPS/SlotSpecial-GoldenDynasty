@@ -204,10 +204,5 @@
             A reserved value and MUST NOT be set as a status code in a Close control frame by an endpoint.  It is designated for use in applications expecting a status code to indicate that the connection was closed due to a failure to perform a TLS handshake (e.g., the server certificate can't be verified).
             </summary>
         </member>
-        <member name="T:UnitySourceGeneratedAssemblyMonoScriptTypes_v1.MonoScriptData">
-            <summary>
-            Data is UTF-8 encoded strings
-            </summary>
-        </member>
     </members>
 </doc>
