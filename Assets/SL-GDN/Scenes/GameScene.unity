@@ -22173,7 +22173,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 1920, y: 1080}
+  m_SizeDelta: {x: 1080, y: 1920}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &627276384
 MonoBehaviour:
@@ -36379,7 +36379,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 46911839856375968, guid: 50e428982bc6b4fdf916b9d7b44515e1, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0.8395444
+      value: 0.71474564
       objectReference: {fileID: 0}
     - target: {fileID: 1097157897625756623, guid: 50e428982bc6b4fdf916b9d7b44515e1, type: 3}
       propertyPath: m_SizeDelta.y
@@ -36447,7 +36447,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 2711241965652395936, guid: 50e428982bc6b4fdf916b9d7b44515e1, type: 3}
       propertyPath: m_SizeDelta.y
-      value: 1080
+      value: 1920
       objectReference: {fileID: 0}
     - target: {fileID: 2711241965652395936, guid: 50e428982bc6b4fdf916b9d7b44515e1, type: 3}
       propertyPath: m_LocalPosition.x
@@ -42691,7 +42691,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f521a04de7f494272a617b2719edd271, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SocketIOManager
-  testToken: 93ddae98c42b437eabc5256c08e0eec1
+  testToken: a546108287404ffa8e7a16157ce5c9b6
   gameManager: {fileID: 1206269883}
   uiManager: {fileID: 885496184}
   popupManager: {fileID: 1363796882}
@@ -69094,7 +69094,7 @@ MonoBehaviour:
   m_HandleRect: {fileID: 834843635}
   m_Direction: 2
   m_Value: 1
-  m_Size: 0.31036222
+  m_Size: 0.3103622
   m_NumberOfSteps: 0
   m_OnValueChanged:
     m_PersistentCalls:
